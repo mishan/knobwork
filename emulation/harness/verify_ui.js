@@ -7,8 +7,53 @@ const os = require("os");
 const path = require("path");
 const WebSocket = require("ws");
 
+function resolveChromePath() {
+    if (process.env.CHROME) return process.env.CHROME;
+    const candidates = [
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser"
+    ];
+    for (const bin of candidates) {
+        if (fs.existsSync(bin)) return bin;
+    }
+    const pwCache = path.join(os.homedir(), ".cache/ms-playwright");
+    if (fs.existsSync(pwCache)) {
+        let found = null;
+        function walkShell(dir) {
+            if (found) return;
+            for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+                const full = path.join(dir, ent.name);
+                if (ent.isDirectory()) walkShell(full);
+                else if (ent.isFile() && ent.name.includes("headless-shell")) {
+                    found = full;
+                    return;
+                }
+            }
+        }
+        walkShell(pwCache);
+        if (found) return found;
+
+        function walkChrome(dir) {
+            if (found) return;
+            for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+                const full = path.join(dir, ent.name);
+                if (ent.isDirectory()) walkChrome(full);
+                else if (ent.isFile() && (ent.name === "chrome" || ent.name === "chromium")) {
+                    found = full;
+                    return;
+                }
+            }
+        }
+        walkChrome(pwCache);
+        if (found) return found;
+    }
+    return "/usr/bin/google-chrome";
+}
+
 const TARGET_URL = process.env.EMU_URL || "http://127.0.0.1:8080/";
-const CHROME = process.env.CHROME || "/usr/bin/google-chrome";
+const CHROME = resolveChromePath();
 const SCREENSHOT = process.env.EMU_SCREENSHOT || "";
 const WIDTH = 800;
 const HEIGHT = 480;
@@ -97,10 +142,16 @@ class CdpClient {
 
 function launchChrome(profileDirectory) {
     const child = spawn(CHROME, [
-        "--headless=new",
+        "--headless=shell",
         "--no-sandbox",
+        "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
         "--disable-gpu",
+        "--disable-breakpad",
+        "--disable-crash-reporter",
+        "--disable-crashpad",
+        "--crash-dumps-dir=/tmp",
+        "--no-crash-dump",
         "--no-first-run",
         "--remote-debugging-port=0",
         "--user-data-dir=" + profileDirectory,
@@ -164,6 +215,13 @@ async function waitForExpression(client, expression, description, timeoutMs = 10
         if (await evaluate(client, expression)) return;
         await delay(100);
     }
+    const diag = await evaluate(client, "({" +
+        "currCtxt: window.framework ? framework.getCurrCtxtId() : null," +
+        "currApp: window.framework ? framework.getCurrentApp() : null," +
+        "initGuiCalled: window.framework ? framework.initGuiCalled : null," +
+        "bodyText: document.body ? document.body.innerText.substring(0, 300) : ''" +
+    "})");
+    console.error("[VERIFY-UI-DIAG]", JSON.stringify(diag));
     throw new Error("Timed out waiting for " + description);
 }
 
@@ -224,7 +282,8 @@ async function main() {
         await waitForExpression(
             client,
             'document.querySelector(".MainMenuCtrlIconName") && document.querySelector(".MainMenuCtrlIconName").innerText === "Communication"',
-            "the stock HomeScreen"
+            "the stock HomeScreen",
+            15000
         );
 
         const initialState = await evaluate(client, "({" +
@@ -257,7 +316,7 @@ async function main() {
         await waitForExpression(
             client,
             'framework.getCurrCtxtId() === "HomeScreen"',
-            "return to HomeScreen"
+            "back to HomeScreen"
         );
         await delay(1200);
 

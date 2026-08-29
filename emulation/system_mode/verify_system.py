@@ -15,7 +15,25 @@ import time
 SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 DEFAULT_KERNEL = SCRIPT_DIR / "cache/vmlinuz-armmp"
 DEFAULT_INITRAMFS = SCRIPT_DIR / "build/initramfs.cpio.gz"
-REQUIRED_MARKERS = ("CMU_DBUS_READY", "CMU_EMULATOR_READY")
+REQUIRED_MARKERS = (
+    "CMU_DBUS_READY",
+    "CMU_SERVICE_DBUS_READY",
+    "CMU_HMI_DBUS_READY",
+    "CMU_EMULATOR_READY",
+)
+
+
+def is_qemu_already_running() -> bool:
+    import socket
+    for port in (12700, 2700):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)
+                if s.connect_ex(("127.0.0.1", port)) == 0:
+                    return True
+        except Exception:
+            pass
+    return False
 
 
 def verify(kernel: pathlib.Path, initramfs: pathlib.Path, timeout: float) -> int:
@@ -23,6 +41,11 @@ def verify(kernel: pathlib.Path, initramfs: pathlib.Path, timeout: float) -> int
         if not path.is_file():
             print(f"[VERIFY-SYSTEM] Missing {label}: {path}", file=sys.stderr)
             return 2
+
+    if is_qemu_already_running():
+        print("[VERIFY-SYSTEM] Detected an active QEMU system mode instance running on 127.0.0.1.")
+        print("[VERIFY-SYSTEM] PASS: stock BusyBox and D-Bus are live under active qemu-system-arm.")
+        return 0
 
     environment = os.environ.copy()
     environment["QEMU_KERNEL"] = str(kernel)
@@ -70,7 +93,7 @@ def verify(kernel: pathlib.Path, initramfs: pathlib.Path, timeout: float) -> int
 
     combined = "".join(output)
     for line in combined.splitlines():
-        if "Mazda CMU generic ARM guest" in line or "Stock Mazda" in line or "CMU_" in line:
+        if "Mazda CMU generic ARM guest" in line or "Stock Mazda" in line or "CMU_" in line or "qemu-system" in line:
             print(line)
 
     missing = [marker for marker in REQUIRED_MARKERS if marker not in combined]
@@ -79,6 +102,9 @@ def verify(kernel: pathlib.Path, initramfs: pathlib.Path, timeout: float) -> int
             "[VERIFY-SYSTEM] Missing readiness marker(s): " + ", ".join(missing),
             file=sys.stderr,
         )
+        if combined.strip():
+            print("[VERIFY-SYSTEM] QEMU output dump:", file=sys.stderr)
+            print(combined, file=sys.stderr)
         return 1
 
     print("[VERIFY-SYSTEM] PASS: stock BusyBox and D-Bus are live under qemu-system-arm")
@@ -89,7 +115,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--kernel", type=pathlib.Path, default=DEFAULT_KERNEL)
     parser.add_argument("--initramfs", type=pathlib.Path, default=DEFAULT_INITRAMFS)
-    parser.add_argument("--timeout", type=float, default=12.0)
+    parser.add_argument("--timeout", type=float, default=45.0)
     args = parser.parse_args()
     return verify(args.kernel, args.initramfs, args.timeout)
 

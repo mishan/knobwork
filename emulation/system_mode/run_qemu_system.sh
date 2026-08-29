@@ -29,7 +29,7 @@ echo " Initramfs: $INITRAMFS"
 echo "=========================================================="
 
 NETWORK=(
-    -netdev user,id=net0
+    -netdev user,id=net0,hostfwd=tcp::12700-:2700,hostfwd=tcp::12766-:2766,hostfwd=tcp::12800-:2800
     -device virtio-net-device,netdev=net0
 )
 

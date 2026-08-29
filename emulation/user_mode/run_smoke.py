@@ -7,11 +7,23 @@ Uses qemu-arm to probe 32-bit ARM binaries in Mazda Connect v74 rootfs.
 import os
 import sys
 import subprocess
+import argparse
 import glob
 import json
-import argparse
 
-DEFAULT_ROOTFS = "/home/user/w/mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root"
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+def resolve_default_rootfs() -> str:
+    candidates = [
+        "/path/to/workspace/mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root",
+        "/home/user/w/mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root",
+        os.path.abspath(os.path.join(BASE_DIR, "../mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root")),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return candidates[0]
+
+DEFAULT_ROOTFS = resolve_default_rootfs()
 
 def check_qemu():
     """Verify qemu-arm binary is available on system."""

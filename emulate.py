@@ -12,7 +12,19 @@ import argparse
 import shutil
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DEFAULT_ROOTFS = "/home/user/w/mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root"
+
+def resolve_default_rootfs() -> str:
+    candidates = [
+        "/path/to/workspace/mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root",
+        "/home/user/w/mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root",
+        os.path.abspath(os.path.join(BASE_DIR, "../mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root")),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return candidates[0]
+
+DEFAULT_ROOTFS = resolve_default_rootfs()
 SYSTEM_MODE_DIR = os.path.join(BASE_DIR, "emulation/system_mode")
 DEFAULT_KERNEL = os.path.join(SYSTEM_MODE_DIR, "cache/vmlinuz-armmp")
 DEFAULT_INITRAMFS = os.path.join(SYSTEM_MODE_DIR, "build/initramfs.cpio.gz")
