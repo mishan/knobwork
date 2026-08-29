@@ -25,6 +25,20 @@ Existing UI emulator:
 /home/user/w/mazda_emulation
 ```
 
+Local Custom Application SDK checkout:
+
+```text
+/home/user/w/mazda-custom-application-sdk
+```
+
+Local TouchTune checkout:
+
+```text
+/home/user/w/TouchTune
+commit fb0cfd7211a0c5b55115fd5485d814b7f8338748
+release 1.1.0
+```
+
 ## Key local artifacts
 
 ```text
@@ -80,6 +94,33 @@ JavaScript syntax gate used for the inventory:
 find ROOT/jci/gui -type f -name '*.js' -print0 |
   while IFS= read -r -d '' file; do node --check "$file"; done
 ```
+
+Emulator regressions:
+
+```sh
+# Terminal 1: stock v74 HMI plus stateful protocol mock
+python3 emulate.py ui
+
+# Terminal 2: exact 800x480 UI, native commander navigation, runtime errors
+python3 emulate.py verify-ui --screenshot /tmp/mazda-ui.png
+
+# qemu-arm stock binaries plus all 2,646 HMI JavaScript files
+python3 emulate.py smoke
+
+# Non-mutating initramfs and qemu-system-arm native service proof
+python3 emulate.py build-guest
+python3 emulate.py verify-system
+```
+
+The system regression was also run against the reviewed Debian ARM kernel with
+SHA-256:
+
+```text
+6d55423515e1e27d5724be7de9d54963c3a3f8a5a9827bf2665bdb2f7ab0a605
+```
+
+It observed stock BusyBox 1.19.2 and stock D-Bus 1.6.4, a live system bus
+socket, `CMU_DBUS_READY`, and `CMU_EMULATOR_READY` under Linux 6.12.38 armv7l.
 
 Service counts:
 
@@ -147,4 +188,3 @@ openssl x509 -in root/jci/certificates/jci_root_cert.pem \
 - Real v74 WebSocket sequencing traces around context/focus/transition events.
 - Watchdog/reset behavior and a reliable safe-mode trigger on the physical CMU.
 - Mazda3-specific validation of the v74 USB filename launcher.
-

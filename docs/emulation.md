@@ -26,6 +26,37 @@ This runs substantially more real CMU software than the existing browser shim
 while avoiding an early dependency on exact Vivante GPU and Mazda board
 emulation.
 
+## Implemented and verified baseline
+
+As of 2026-08-29, the repository has working implementations for the first
+three layers:
+
+- **Browser HMI:** serves the unmodified v74 `jci/gui` tree, translates the
+  Opera CSS needed by modern browsers, preserves the stock WebSocket parser,
+  and provides a stateful MMUI mock.
+- **ARM user mode:** executes stock Mazda ARM BusyBox, D-Bus, and `smctl`
+  binaries with `qemu-arm`; the syntax gate checks all 2,646 HMI JavaScript
+  files.
+- **Generic ARM system mode:** boots a maintained Debian ARM kernel on QEMU
+  `virt` with two ARMv7 CPUs and a generated initramfs containing stock Mazda
+  BusyBox, the stock Mazda D-Bus 1.6.4 daemon, and their stock runtime
+  libraries. It verifies the live bus socket, reaches a serial shell, and
+  emits `CMU_DBUS_READY` followed by `CMU_EMULATOR_READY`.
+
+The browser regression is not a process-only smoke test. It launches a clean
+headless Chrome instance at exactly 800x480 and verifies:
+
+1. all three GUI sockets are open;
+2. the framework is idle in `system/HomeScreen` with an empty queue;
+3. native commander input rotates to Applications;
+4. Enter opens the stock Applications screen;
+5. Back returns to HomeScreen;
+6. no browser runtime errors occurred; and
+7. the proof screenshot is exactly 800x480.
+
+This is a functional development baseline, not yet a full CMU service stack.
+The generic guest does not yet run real MMUI/AppSDK/DBAPI services.
+
 ## Existing `mazda_emulation` repository
 
 The repository at `/home/user/w/mazda_emulation` is a UI emulator, not a
@@ -62,9 +93,26 @@ Important limitations:
 It remains valuable as the frontend test harness and should be modernized,
 not discarded.
 
-### Custom Application SDK (CASDK) Compatibility
+### Custom Application SDK (CASDK)
 
-The harness includes explicit support hooks for applications built with [flyandi/mazda-custom-application-sdk](https://github.com/flyandi/mazda-custom-application-sdk). The browser bootstrapper (`boot.js`) automatically detects `CustomApplicationsProxy` and invokes `.bootstrap()`, enabling custom CASDK applications to be tested seamlessly in the emulator harness.
+The local checkout at `/home/user/w/mazda-custom-application-sdk` is useful,
+but as reference material rather than a drop-in current runtime:
+
+- its latest local commit is from 2016-09-22;
+- the top-level package is version 0.0.4 and explicitly alpha;
+- it contains the application lifecycle, controller, persistent-storage,
+  vehicle-data, AppDrive, resource-loader, and port-9700 Node bridge designs;
+- its newer source uses `window.CMU` and `CMU.proxy`;
+- the older prebuilt file in `mazda_emulation/sdcard/CustomApplicationsProxy.js`
+  instead exports `window.CustomApplicationsProxy`.
+
+The previous WIP harness polled forever for the older
+`CustomApplicationsProxy` symbol even though it did not load that file. That
+hook never ran. The new Opera compatibility object correctly maps
+`AfterEvent.load` to the browser load event, so an explicitly loaded legacy
+proxy can bootstrap itself in its original way. Proper CASDK integration should
+be a separately configured fixture that selects either the legacy proxy or the
+newer CMU/AppDrive runtime; the two should not be conflated.
 
 ## Why the stock image will not boot unchanged
 
@@ -248,16 +296,40 @@ The first full-system milestone should be considered successful when it can:
 
 ## Required host tooling
 
-The current host does not have `qemu-system-arm` or `qemu-arm` installed. The
-implementation will need, at minimum:
+The current host has QEMU 11.1.0, Google Chrome, Node, Python, CPIO/gzip, and
+ext filesystem tools. The working baseline uses:
 
 - QEMU system ARM and user-mode ARM;
-- an ARM kernel suitable for QEMU `virt` or a reproducible kernel build;
+- the pinned and SHA-256-checked Debian ARM installer kernel fetched by
+  `emulation/system_mode/fetch_kernel.py`;
 - ext4 image tools;
 - CPIO/gzip (already present);
 - Node/browser automation for the UI side;
 - optionally an ARM cross-toolchain for small guest helpers.
 
-Dependency installation should be explicit and reproducible, preferably through
-a container/devcontainer or a documented package list rather than relying on
-unrecorded host state.
+The Debian `current` installer URL is mutable. The fetcher deliberately fails
+if its content no longer matches the tested SHA-256; a new checksum must not be
+accepted until the new kernel has passed the system-mode regression.
+
+## Running the verified baseline
+
+From `/path/to/workspace_improvement`:
+
+```sh
+# Terminal 1: stock browser HMI plus stateful mock backend
+python3 emulate.py ui
+
+# Terminal 2: real UI navigation and screenshot regression
+python3 emulate.py verify-ui --screenshot emulation/harness/artifacts/ui.png
+
+# ARM user-mode binaries and all-JavaScript syntax gate
+python3 emulate.py smoke
+
+# Generic ARM full-system proof
+python3 emulate.py fetch-kernel
+python3 emulate.py build-guest
+python3 emulate.py verify-system
+```
+
+The build output and downloaded kernel are ignored. `build-guest` treats the
+extracted firmware tree as read-only input.

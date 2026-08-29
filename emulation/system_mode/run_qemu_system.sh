@@ -1,48 +1,49 @@
 #!/usr/bin/env bash
-# Stage 2/3 QEMU Full-System Guest Launcher for Mazda CMU
-set -e
+# Boot the generic ARM CMU guest. This intentionally does not use the
+# board-specific Mazda zImage.
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EMU_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-ROOTFS_DIR="${ROOTFS_DIR:-/home/user/w/mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root}"
-ZIMAGE="${SCRIPT_DIR}/zImage"
-MACHINE="${QEMU_MACHINE:-sabrelite}"
+KERNEL="${QEMU_KERNEL:-${SCRIPT_DIR}/cache/vmlinuz-armmp}"
+INITRAMFS="${QEMU_INITRAMFS:-${SCRIPT_DIR}/build/initramfs.cpio.gz}"
 MEMORY="${QEMU_MEM:-512M}"
+CPUS="${QEMU_CPUS:-2}"
 
-if [ ! -f "$ZIMAGE" ]; then
-    echo "[EMU-SYS] Kernel zImage not found at $ZIMAGE. Building guest root first..."
-    python3 "$SCRIPT_DIR/build_guest_root.py" --root "$ROOTFS_DIR"
+if [[ ! -f "$KERNEL" ]]; then
+    echo "[EMU-SYS] QEMU-compatible ARM kernel not found: $KERNEL" >&2
+    echo "[EMU-SYS] Run: python3 $SCRIPT_DIR/fetch_kernel.py" >&2
+    exit 2
+fi
+
+if [[ ! -f "$INITRAMFS" ]]; then
+    echo "[EMU-SYS] Emulator initramfs not found: $INITRAMFS" >&2
+    echo "[EMU-SYS] Run: python3 $SCRIPT_DIR/build_guest_root.py" >&2
+    exit 2
 fi
 
 echo "=========================================================="
-echo " Starting Mazda CMU QEMU Full-System Emulation "
-echo " Machine: ${MACHINE}"
-echo " Kernel: ${ZIMAGE}"
-echo " Rootfs: ${ROOTFS_DIR}"
-echo " WebSockets Forwarded: 2700 (MMUI), 2766 (DBAPI), 2800 (APPSDK)"
+echo " Mazda CMU generic ARM full-system guest"
+echo " Machine: QEMU virt / Cortex-A15"
+echo " Kernel: $KERNEL"
+echo " Initramfs: $INITRAMFS"
 echo "=========================================================="
 
-# Ports: 2700 (MMUI/guiifm), 2766 (DBAPI), 2800 (AppSDK), 2222 (SSH)
-NET_OPTS="-netdev user,id=net0,hostfwd=tcp::2700-:2700,hostfwd=tcp::2766-:2766,hostfwd=tcp::2800-:2800,hostfwd=tcp::2222-:22 -device virtio-net-device,netdev=net0"
+NETWORK=(
+    -netdev user,id=net0
+    -device virtio-net-device,netdev=net0
+)
 
-if [ "$MACHINE" = "sabrelite" ]; then
-    exec qemu-system-arm \
-        -machine sabrelite \
-        -m "$MEMORY" \
-        -smp 2 \
-        -kernel "$ZIMAGE" \
-        -append "console=ttymxc0,115200 root=/dev/ram0 rw init=/sbin/init_emulator ip=dhcp" \
-        -nographic \
-        "$@"
-else
-    exec qemu-system-arm \
-        -machine virt \
-        -cpu cortex-a9 \
-        -m "$MEMORY" \
-        -smp 2 \
-        -kernel "$ZIMAGE" \
-        -append "console=ttyAMA0,115200 root=/dev/vda rw init=/sbin/init_emulator ip=dhcp" \
-        $NET_OPTS \
-        -nographic \
-        "$@"
-fi
+QEMU_ARGS=(
+    -machine virt
+    -cpu cortex-a15
+    -m "$MEMORY"
+    -smp "$CPUS"
+    -kernel "$KERNEL"
+    -initrd "$INITRAMFS"
+    -append "console=ttyAMA0 rdinit=/init panic=-1 ${QEMU_KERNEL_ARGS:-}"
+    "${NETWORK[@]}"
+    -nographic
+    -no-reboot
+)
+
+exec qemu-system-arm "${QEMU_ARGS[@]}" "$@"

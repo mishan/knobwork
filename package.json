@@ -4,7 +4,8 @@
   "description": "Emulation harness for Mazda Connect Gen 6 CMU firmware",
   "main": "emulation/harness/server.js",
   "scripts": {
-    "start": "node emulation/harness/server.js"
+    "start": "node emulation/harness/server.js",
+    "verify-ui": "node emulation/harness/verify_ui.js"
   },
   "dependencies": {
     "express": "^4.19.2",

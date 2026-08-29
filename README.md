@@ -29,6 +29,7 @@ none of the patch concepts documented here have been installed on a CMU.
 - [Firmware inventory and comparison](docs/firmware-inventory.md)
 - [Runtime and UI findings](docs/runtime-and-ui.md)
 - [Emulation architecture](docs/emulation.md)
+- [Emulator handoff review and verified baseline](docs/emulator-review.md)
 - [Modification and recovery roadmap](docs/roadmap.md)
 - [Evidence, hashes, and sources](docs/evidence.md)
 
@@ -43,3 +44,24 @@ The documents use these terms deliberately:
 - **Open**: requires emulator work, a bench CMU, serial capture, or controlled
   hardware testing.
 
+## Emulator quick start
+
+The UI server and its regression run as separate commands:
+
+```sh
+python3 emulate.py ui
+python3 emulate.py verify-ui --screenshot /tmp/mazda-ui.png
+```
+
+The ARM system guest uses a checksum-pinned generic kernel and a generated,
+non-mutating initramfs:
+
+```sh
+python3 emulate.py fetch-kernel
+python3 emulate.py build-guest
+python3 emulate.py verify-system
+```
+
+The current full-system regression boots stock Mazda BusyBox and the stock
+Mazda D-Bus daemon. It does not yet claim that the complete CMU service graph
+or native renderer is running.

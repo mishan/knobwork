@@ -122,7 +122,7 @@ def run_suite(rootfs):
         if len(js_results['failures']) > 5:
             print(f"  ... and {len(js_results['failures']) - 5} more.")
 
-    print("\n=" * 60)
+    print("\n" + "=" * 60)
     print("[SMOKE] Stage 1 Smoke Test Suite Completed")
     print("=" * 60)
 

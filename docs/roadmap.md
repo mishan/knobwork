@@ -27,6 +27,21 @@ Required properties:
 - implement install, verify, repair, disable, and restore actions;
 - support a boot-attempt counter and safe-mode rollback.
 
+The local TouchTune 1.1.0 implementation supplies a concrete base for launcher
+discovery, exact `.324A` gating, the `/tmp` single-run guard, dialogs, immutable
+first backups, NVRAM restore, watchdog handling, USB logging, and reusable
+install/repair/remove media. Preserve those tested mechanisms. Extend them for
+larger patch sets with:
+
+- a signed or review-pinned manifest of payload and expected target hashes;
+- a preflight phase that performs every version/hash/space/syntax check before
+  remounting the root filesystem read-write;
+- same-filesystem staging plus atomic rename, never in-place `sed -i` edits;
+- a transaction journal and immediate reverse-order rollback on any failure;
+- failure propagation for NVRAM writes, watchdog restoration, remount, and
+  final verification rather than warning-only completion; and
+- off-target tests running against a disposable replica of the v74 paths.
+
 Start with a harmless diagnostic overlay before any framework modification.
 
 ## Phase 3: runtime and UI improvements
@@ -73,4 +88,3 @@ Use the least invasive layer that can deliver the desired result:
 | File/config transaction | overlay manager or normal-mode package |
 | Kernel/driver experiment | spare CMU or board-focused QEMU work |
 | Failsafe/bootloader experiment | verified hardware recovery first |
-
