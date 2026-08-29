@@ -62,6 +62,10 @@ Important limitations:
 It remains valuable as the frontend test harness and should be modernized,
 not discarded.
 
+### Custom Application SDK (CASDK) Compatibility
+
+The harness includes explicit support hooks for applications built with [flyandi/mazda-custom-application-sdk](https://github.com/flyandi/mazda-custom-application-sdk). The browser bootstrapper (`boot.js`) automatically detects `CustomApplicationsProxy` and invokes `.bootstrap()`, enabling custom CASDK applications to be tested seamlessly in the emulator harness.
+
 ## Why the stock image will not boot unchanged
 
 ### Board support
