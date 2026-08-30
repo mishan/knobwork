@@ -93,6 +93,87 @@ function assertHealthMode(health) {
     }
 }
 
+function assertNativeDisplayLifecycle(health) {
+    const display = health.proxy.nativeDisplay;
+    const expectedCounts = {
+        notifications: 1,
+        startEvents: 1,
+        finishEvents: 1,
+        showDisclaimerEvents: 1,
+        frontendDisposeEvents: 1
+    };
+    for (const [name, expected] of Object.entries(expectedCounts)) {
+        if (display[name] !== expected) {
+            throw new Error(
+                "native display lifecycle " + name + " was " + display[name]
+                + ", expected " + expected
+            );
+        }
+    }
+    if (display.lastError !== null
+            || display.lastNotification !== "splash-complete surface=TRANLOGO_SURFACE") {
+        throw new Error("native display completion was not clean: " + JSON.stringify(display));
+    }
+
+    const messages = health.proxy.backends.guiifm.controlMessages;
+    const expectedSequence = [
+        ["native-display-to-guest", "eventId", "StartIntroAnimation"],
+        ["guest-to-frontend", "ctxtId", "IntroAnimation"],
+        ["native-display-to-guest", "eventId", "FinishIntroAnimation"],
+        ["native-display-to-guest", "eventId", "ShowDisclaimer"],
+        ["guest-to-frontend", "ctxtId", "Disclaimer"],
+        ["frontend-to-guest", "eventId", "DisposeIntroVideo"],
+        ["frontend-to-guest", "eventId", "Timeout"],
+        ["guest-to-frontend", "ctxtId", "HomeScreen"],
+        ["frontend-to-guest", "eventId", "NotifyDisclaimerEnd"]
+    ];
+    let cursor = 0;
+    for (const [direction, field, value] of expectedSequence) {
+        const found = messages.findIndex((entry, index) => (
+            index >= cursor
+            && entry.direction === direction
+            && entry.summary
+            && entry.summary[field] === value
+        ));
+        if (found < 0) {
+            throw new Error(
+                "native lifecycle trace is missing " + direction + " " + field + "=" + value
+            );
+        }
+        cursor = found + 1;
+    }
+}
+
+function summarizeProxyHealth(health) {
+    const lifecycleIds = new Set([
+        "InitializeGuiComplete", "StartIntroAnimation", "FinishIntroAnimation",
+        "ShowDisclaimer", "DisposeIntroVideo", "Timeout", "NotifyDisclaimerEnd"
+    ]);
+    const lifecycleContexts = new Set(["IntroAnimation", "Disclaimer", "HomeScreen"]);
+    return {
+        rootfs: health.rootfs,
+        mockFallbackMessages: health.proxy.mockFallbackMessages,
+        nativeDisplay: health.proxy.nativeDisplay,
+        backends: Object.fromEntries(Object.entries(health.proxy.backends).map(
+            ([name, backend]) => [name, {
+                status: backend.status,
+                activeConnections: backend.activeConnections,
+                frontendToGuestMessages: backend.frontendToGuestMessages,
+                guestToFrontendMessages: backend.guestToFrontendMessages,
+                frontendToGuestBinaryMessages: backend.frontendToGuestBinaryMessages,
+                guestToFrontendBinaryMessages: backend.guestToFrontendBinaryMessages,
+                lastError: backend.lastError
+            }]
+        )),
+        lifecycleTrace: health.proxy.backends.guiifm.controlMessages
+            .filter((entry) => entry.summary && (
+                lifecycleIds.has(entry.summary.eventId)
+                || lifecycleContexts.has(entry.summary.ctxtId)
+            ))
+            .map((entry) => ({ direction: entry.direction, summary: entry.summary }))
+    };
+}
+
 async function waitForNativeProxy() {
     const healthUrl = new URL("/__emu/health", TARGET_URL);
     const deadline = Date.now() + 10000;
@@ -339,8 +420,10 @@ async function main() {
         if (EXPECTED_MODE === "proxy") {
             await waitForExpression(
                 client,
-                '["IntroAnimation", "HomeScreen"].includes(framework.getCurrCtxtId())',
-                "a native MMUI startup context",
+                'framework.getCurrCtxtId() === "HomeScreen" && '
+                    + 'document.querySelector(".MainMenuCtrlIconName") && '
+                    + 'document.querySelector(".MainMenuCtrlIconName").innerText.length > 0',
+                "the native MMUI HomeScreen and a visible menu icon",
                 30000
             );
             proxyHealth = await getJson(new URL("/__emu/health", TARGET_URL));
@@ -390,6 +473,7 @@ async function main() {
                     + JSON.stringify(proxyHealth)
                 );
             }
+            assertNativeDisplayLifecycle(proxyHealth);
 
             const capture = await client.send("Page.captureScreenshot", {
                 format: "png",
@@ -415,17 +499,24 @@ async function main() {
                 return event.method === "Runtime.consoleAPICalled"
                     && event.params.type === "error";
             });
-            const knownNativeStartupErrors = errors.filter((event) => (
-                event.method === "Runtime.consoleAPICalled"
-                && event.params.args
-                && event.params.args.some((arg) => (
-                    typeof arg.value === "string"
-                    && arg.value.includes(
-                        "SYS_SETTINGS app didn't set all required values before timeout"
-                    )
-                    && arg.value.includes("issuing initGui with necessary default values")
-                ))
-            ));
+            const knownNativeStartupErrors = errors.filter((event) => {
+                if (event.method !== "Runtime.consoleAPICalled" || !event.params.args) {
+                    return false;
+                }
+                return event.params.args.some((arg) => {
+                    if (typeof arg.value !== "string") return false;
+                    const value = arg.value;
+                    return (
+                        value.includes(
+                            "SYS_SETTINGS app didn't set all required values before timeout"
+                        )
+                        && value.includes("issuing initGui with necessary default values")
+                    ) || (
+                        value.includes("ERROR vehsettings vehsettingsApp.js[7050]")
+                        && value.includes("context/template not initialized")
+                    );
+                });
+            });
             const unexpectedErrors = errors.filter(
                 (event) => !knownNativeStartupErrors.includes(event)
             );
@@ -439,18 +530,16 @@ async function main() {
 
             console.log(JSON.stringify({
                 ok: true,
-                scope: "native-startup-transport",
+                scope: "native-home-menu",
                 target: TARGET_URL,
                 screenshot: SCREENSHOT || null,
                 screenshotDimensions: dimensions,
                 initialState,
-                limitation: initialState.currentContext === "IntroAnimation"
-                    ? "native splashplayer/nativeguictrl completion is not emulated"
-                    : null,
+                limitation: null,
                 knownNativeStartupErrors: knownNativeStartupErrors.map(
                     (event) => event.params.args.map((arg) => arg.value).filter(Boolean)
                 ),
-                backendProvenance: proxyHealth
+                backendProvenance: summarizeProxyHealth(proxyHealth)
             }, null, 2));
             return;
         }

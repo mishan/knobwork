@@ -46,14 +46,22 @@ four stages:
   QEMU and requires readiness markers for every D-Bus bus, SM, MMUI, AppSDK,
   and DBAPI. Native UI proxy mode is fail-closed, exposes per-service
   connection evidence, preserves WebSocket text/binary framing, and cannot use
-  mock MMUI routing or synthetic browser startup state. The native proof reaches
-  MMUI's genuine `system.IntroAnimation`; it does not claim Home/menu coverage.
+  mock MMUI routing or synthetic browser startup state.
 - **Hardware API shims (Stage 4):** the generated guest provides a writable
   27-key NVRAM tree, GPIO and MTD metadata, a recording watchdog endpoint,
   removable-media mount points, stock ALSA configuration data, and real QEMU
   virtio keyboard/tablet devices exposed under MMUI's expected path names.
   `verify-system` requires each shim and additionally rejects the old
   jciBLMSettings NVRAM/ALSA-config and MMUI input error paths.
+- **Headless native-display lifecycle:** the guest preserves the original
+  `splashplayer` and `svcjcinativeguictrl` binaries under
+  `/jci/emulator/stock`, while narrow adapters reproduce their ready flags,
+  process ownership, `TRANLOGOEND_SURFACE` PID, and one-shot completion. The
+  host bridges the unavailable BLM System HMI-ready response with the stock
+  `ShowDisclaimer` event. Stock MMUI and stock `systemApp.js` then perform
+  `DisposeIntroVideo`, `Timeout`, and `NotifyDisclaimerEnd` themselves. Strict
+  proxy verification requires the ordered `IntroAnimation` -> `Disclaimer` ->
+  `HomeScreen` trace and a populated main-menu icon.
 
 ## Existing `mazda_emulation` repository
 
@@ -262,10 +270,17 @@ maps their real event nodes to `filtered-keyboard0`, `filtered-mouse0`, and
 The ARM `virt` machine uses `highmem=off` because this 32-bit kernel could not
 probe the high-memory PCI window.
 
+The headless display adapters deliberately do not decode IVF video or create
+Wayland surfaces. Stock `nativeguictrl` still requires the CMU compositor, and
+stock `splashplayer` still requires `/dev/mxc_vpu`; both original binaries are
+kept in the guest for continued reverse engineering. The adapters model the
+observable lifecycle required by MMUI, including the `tranlogoend.pid` process
+that MMUI must successfully terminate before leaving the intro.
+
 Remaining hardware work includes pollable GPIO change notification, an ALSA
 device/loopback, persistent NVRAM across guest boots, VIP/CAN wiring into the
-guest, deterministic clock/fault injection, and native GPU/display services.
-Use `LD_PRELOAD` only for narrow, measured boundaries.
+guest, deterministic clock/fault injection, and native pixel rendering. Use
+`LD_PRELOAD` only for narrow, measured boundaries.
 
 ### Stage 5: native renderer experiment
 
@@ -355,16 +370,16 @@ The mock and proxy regressions are intentionally distinct. Mock mode permits
 deterministic synthetic startup and menu routing, and verifies HomeScreen,
 commander navigation into Applications, and return to Home. Proxy mode requires
 live connections to all three QEMU-forwarded stock services, bidirectional MMUI
-text traffic, and zero mock fallback. Its current verified endpoint is native
-`system.IntroAnimation`, because the GPU `splashplayer`/`nativeguictrl` service
-lifecycle is not emulated. It intentionally does not synthesize the transition
-to Home.
+text traffic, zero mock fallback, exactly one headless splash completion, and
+the ordered stock MMUI lifecycle through native `HomeScreen`. The transition is
+not fabricated in browser state: the bridge supplies only the missing native
+display/BLM edges, then requires stock MMUI context messages and a populated
+stock `.MainMenuCtrlIconName` element.
 
-This also explains the native-mode menu-icon gap: unlike mock mode, proxy mode
-does not announce every optional application as available. Icons remain absent
-until the corresponding native services and StatusMenu availability events are
-running. That is a service-coverage limitation, not a missing-resource or CSS
-regression.
+Only applications backed by running guest services become available, so proxy
+mode still has fewer optional entries than the all-enabled mock menu. The core
+Home icons are now present; absent optional entries remain a service-coverage
+limitation rather than a missing-resource or CSS regression.
 
 The build output, downloaded kernel, and matching Debian installer initrd are
 ignored. `build-guest` treats the extracted firmware tree as read-only input,
@@ -373,7 +388,7 @@ only the exact network and input module closure, records all input, shim, and
 module SHA-256 values, and fails when a required service binary, shared library,
 kernel module, or hardware seed is missing.
 
-The v74 update tree contains an `audiosettings` app without its optional app
-stylesheet. The harness returns an allowlisted empty CSS response for that one
-path and records the use in `/__emu/health`; other missing stylesheets still
-surface as browser errors.
+The v74 update tree contains `audiosettings` and `tutorial` apps without their
+optional app stylesheets. The harness returns allowlisted empty CSS responses
+for those two exact paths and records every use in `/__emu/health`; other
+missing stylesheets still surface as browser errors.

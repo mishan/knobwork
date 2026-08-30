@@ -80,8 +80,10 @@ python3 emulate.py verify-ui --expect-mode proxy
 
 Proxy verification is fail-closed: it never substitutes mock MMUI responses
 when a native guest connection is unavailable. It proves bidirectional text
-traffic through all three stock services and currently stops at MMUI's real
-`system.IntroAnimation` context. The deterministic mock regression remains the
-full Home/menu/navigation test. Native Home requires the missing
-`splashplayer`/`nativeguictrl` lifecycle, and optional menu icons remain absent
-until their native services publish availability.
+traffic through all three stock services and the ordered native display
+lifecycle from `system.IntroAnimation` through `Disclaimer` to `HomeScreen`.
+The generated guest preserves the stock display binaries for analysis but uses
+headless `splashplayer`/`nativeguictrl` adapters because QEMU does not implement
+the CMU's Vivante VPU/Wayland stack. The strict regression now requires a real
+MMUI Home context and a populated stock menu icon; the deterministic mock
+regression remains the broader commander/navigation test.

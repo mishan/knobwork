@@ -8,6 +8,20 @@ KERNEL="${QEMU_KERNEL:-${SCRIPT_DIR}/cache/vmlinuz-armmp}"
 INITRAMFS="${QEMU_INITRAMFS:-${SCRIPT_DIR}/build/initramfs.cpio.gz}"
 MEMORY="${QEMU_MEM:-512M}"
 CPUS="${QEMU_CPUS:-2}"
+MMUI_PORT="${MMUI_PORT:-2700}"
+DBAPI_PORT="${DBAPI_PORT:-2766}"
+APPSDK_PORT="${APPSDK_PORT:-2800}"
+
+for port in "$MMUI_PORT" "$DBAPI_PORT" "$APPSDK_PORT"; do
+    if [[ ! "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 55535 )); then
+        echo "[EMU-SYS] Invalid proxy port: $port" >&2
+        exit 2
+    fi
+done
+
+MMUI_HOST_PORT=$((MMUI_PORT + 10000))
+DBAPI_HOST_PORT=$((DBAPI_PORT + 10000))
+APPSDK_HOST_PORT=$((APPSDK_PORT + 10000))
 
 if [[ ! -f "$KERNEL" ]]; then
     echo "[EMU-SYS] QEMU-compatible ARM kernel not found: $KERNEL" >&2
@@ -26,10 +40,11 @@ echo " Mazda CMU generic ARM full-system guest"
 echo " Machine: QEMU virt / Cortex-A15"
 echo " Kernel: $KERNEL"
 echo " Initramfs: $INITRAMFS"
+echo " Host forwards: ${MMUI_HOST_PORT}->2700 ${DBAPI_HOST_PORT}->2766 ${APPSDK_HOST_PORT}->2800"
 echo "=========================================================="
 
 NETWORK=(
-    -netdev user,id=net0,hostfwd=tcp::12700-:2700,hostfwd=tcp::12766-:2766,hostfwd=tcp::12800-:2800
+    -netdev user,id=net0,hostfwd=tcp::${MMUI_HOST_PORT}-:2700,hostfwd=tcp::${DBAPI_HOST_PORT}-:2766,hostfwd=tcp::${APPSDK_HOST_PORT}-:2800
     -device virtio-net-device,netdev=net0
 )
 

@@ -27,6 +27,7 @@ REQUIRED_MARKERS = (
     "CMU_NVRAM_CONSUMER_READY",
     "CMU_INPUT_CONSUMER_READY",
     "CMU_ALSA_CONFIG_CONSUMER_READY",
+    "CMU_NATIVEGUICTRL_READY",
     "CMU_NETWORK_READY",
     "CMU_DBUS_READY",
     "CMU_SERVICE_DBUS_READY",
@@ -138,7 +139,7 @@ def verify(kernel: pathlib.Path, initramfs: pathlib.Path, timeout: float) -> int
 
     print(
         "[VERIFY-SYSTEM] PASS: owned qemu-system-arm boot reached all Stage 4 "
-        "hardware-shim, D-Bus, and native MMUI/AppSDK/DBAPI readiness markers"
+        "hardware/display-shim, D-Bus, and native MMUI/AppSDK/DBAPI readiness markers"
     )
     return 0
 

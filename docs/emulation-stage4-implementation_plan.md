@@ -17,6 +17,7 @@ testable hardware compatibility layer. The stock `jciBLMSettings` and
 | Input | QEMU PCI virtio keyboard/tablet plus pinned ARM input modules | Real evdev character devices mapped to Mazda names; MMUI ioctl/read errors absent |
 | Watchdog | FIFO with recording reader | Endpoint type and log destination checked in guest |
 | Removable media | Empty JCI mount points | All three mount points checked in guest |
+| Native display lifecycle | Headless `nativeguictrl`/`splashplayer` adapters with stock binaries preserved | Strict ordered MMUI trace reaches Home and exposes a populated menu icon |
 
 `verify-system` owns QEMU and requires the individual shim markers, the
 aggregate `CMU_HARDWARE_SHIMS_READY` marker, native consumer-level markers, and
@@ -55,13 +56,30 @@ The generic 32-bit ARM kernel cannot probe QEMU's high-memory PCI window, so
 the launcher uses `virt,highmem=off`. This allows the PCI virtio devices to bind
 without introducing a custom guest helper or an unpinned kernel module.
 
+### Native display lifecycle
+
+The proprietary display binaries cannot run unchanged in the generic guest:
+stock `svcjcinativeguictrl` needs the CMU Wayland compositor, while stock
+`splashplayer` needs `/dev/mxc_vpu`. The builder preserves both originals under
+`/jci/emulator/stock` and installs narrow headless adapters for their observable
+contract.
+
+The splash adapter validates its IVF input, publishes the stock ready flag,
+models one-shot or looping lifetime, and sends a completion token to the host.
+The native-GUI adapter owns a real PID and creates the separate
+`tranlogoend.pid` companion that stock MMUI later terminates. Completion tokens
+are durable when they arrive before the browser socket: the proxy delivers
+`FinishIntroAnimation` exactly once after `InitializeGuiComplete`, supplies the
+missing BLM System `ShowDisclaimer` response, and lets stock JS drive disposal
+and timeout. No browser context is rewritten or synthesized.
+
 ### Narrow browser compatibility response
 
-The unpacked v74 update includes `audiosettingsApp.js` and its images but not
-`apps/audiosettings/css/audiosettingsApp.css`. Native startup can request that
-optional stylesheet once more backend state becomes available. The HTTP
-harness returns empty CSS only for that exact allowlisted path and records the
-response in `/__emu/health`; arbitrary missing CSS remains an error.
+The unpacked v74 update includes `audiosettings` and `tutorial` JavaScript but
+not their optional application stylesheets. Native startup requests both as
+more backend state becomes available. The HTTP harness returns empty CSS only
+for those exact allowlisted paths and records the responses in
+`/__emu/health`; arbitrary missing CSS remains an error.
 
 ## Verified evidence
 
@@ -86,8 +104,10 @@ python3 emulate.py verify-ui --expect-mode mock \
   --screenshot /tmp/mazda-ui-stage4-mock.png
 ```
 
-Native proxy verification remains honest: it proves the real messaging path to
-`system.IntroAnimation` and uses no mock fallback. It does not synthesize Home.
+Native proxy verification remains honest: it proves the real messaging path and
+ordered `system.IntroAnimation` -> `system.Disclaimer` -> `system.HomeScreen`
+contexts with no mock fallback. It also requires the stock UI to populate a
+main-menu icon and rejects missing, duplicated, or reordered display events.
 
 ## Remaining hardware gaps
 
@@ -98,5 +118,5 @@ Native proxy verification remains honest: it proves the real messaging path to
 - VIP/CAN scenario playback is not connected to the ARM guest.
 - Removable-media insertion is not yet driven through a control socket.
 - Deterministic time and fault injection remain future work.
-- The proprietary `splashplayer`/`nativeguictrl`/Wayland lifecycle remains the
-  blocker between native `IntroAnimation` and native Home.
+- IVF pixels and Wayland surfaces are not rendered; the display adapters model
+  lifecycle semantics only.

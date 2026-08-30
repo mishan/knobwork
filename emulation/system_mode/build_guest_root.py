@@ -97,12 +97,16 @@ NATIVE_SERVICE_FILES = (
     "jci/appsdk/plugins/libjciplugincd.so",
     "jci/dbapi/svcjcidbapi.so",
     "jci/mmui/svcjcimmui.so",
+    "jci/nativegui/svcjcinativeguictrl",
+    "usr/bin/splashplayer",
 )
 
 NATIVE_DATA_DIRECTORIES = (
     "jci/appsdk",
     "jci/dbapi",
     "jci/mmui",
+    "jci/nativegui",
+    "jci/resources",
     "jci/settings",
     "jci/sm",
     "jci/lib",
@@ -137,6 +141,135 @@ APPSDK_CONFIG = """<AppsdkLoadConfiguration>
     JSlib="libjciplugincd.js" api="APPL_OPEN" param="1"
     passvalue="0" failaction="continue" block="true" />
 </AppsdkLoadConfiguration>
+"""
+
+NATIVEGUICTRL_SHIM = """#!/bin/busybox sh
+set -eu
+
+log=/tmp/display-lifecycle.log
+pid_file=/var/run/nativeguictrl.pid
+tranlogoend_pid_file=/var/run/tranlogoend.pid
+tranlogoend_pid=""
+mkdir -p /var/run
+echo "$$" > "$pid_file"
+echo "CMU_NATIVEGUICTRL_SHIM_READY pid=$$ mode=headless" | tee -a "$log" /dev/console
+
+cleanup() {
+    if [ -n "$tranlogoend_pid" ] && kill -0 "$tranlogoend_pid" 2>/dev/null; then
+        kill "$tranlogoend_pid" 2>/dev/null || true
+    fi
+    rm -f "$pid_file" "$tranlogoend_pid_file"
+    echo "CMU_NATIVEGUICTRL_SHIM_STOPPED pid=$$" | tee -a "$log" /dev/console
+    exit 0
+}
+trap cleanup HUP INT QUIT TERM
+
+while :; do
+    if [ -s /var/run/tranlogo_ready_flag ] && [ -z "$tranlogoend_pid" ]; then
+        # Stock nativeguictrl starts TranLogoEnd.ivf after TRANLOGO_SURFACE is
+        # registered. MMUI later terminates this process while disposing the
+        # intro surface and only clears IntroAnimation when kill(1) succeeds.
+        sleep 3600 &
+        tranlogoend_pid=$!
+        echo "$tranlogoend_pid" > "$tranlogoend_pid_file"
+        echo "CMU_NATIVEGUICTRL_TRANLOGOEND_READY pid=$tranlogoend_pid surface=TRANLOGOEND_SURFACE" | tee -a "$log" /dev/console
+    fi
+    if [ -n "$tranlogoend_pid" ] && ! kill -0 "$tranlogoend_pid" 2>/dev/null; then
+        rm -f "$tranlogoend_pid_file"
+        echo "CMU_NATIVEGUICTRL_TRANLOGOEND_STOPPED pid=$tranlogoend_pid" | tee -a "$log" /dev/console
+        tranlogoend_pid=""
+    fi
+    sleep 1
+done
+"""
+
+SPLASHPLAYER_SHIM = """#!/bin/busybox sh
+set -eu
+
+log=/tmp/display-lifecycle.log
+ready_flag=""
+surface="UNKNOWN_SURFACE"
+loop=0
+media=""
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -p)
+            [ "$#" -ge 2 ] || exit 64
+            ready_flag=$2
+            shift 2
+            ;;
+        -t)
+            [ "$#" -ge 2 ] || exit 64
+            surface=$2
+            shift 2
+            ;;
+        -z)
+            [ "$#" -ge 2 ] || exit 64
+            shift 2
+            ;;
+        -l)
+            loop=1
+            shift
+            ;;
+        -q)
+            shift
+            ;;
+        --)
+            shift
+            break
+            ;;
+        -*)
+            echo "CMU_SPLASHPLAYER_SHIM_FAILED unsupported_option=$1" | tee -a "$log" /dev/console
+            exit 64
+            ;;
+        *)
+            media=$1
+            shift
+            ;;
+    esac
+done
+
+[ -n "$media" ] || media=${1:-}
+if [ -z "$ready_flag" ] || [ -z "$media" ] || [ ! -r "$media" ]; then
+    echo "CMU_SPLASHPLAYER_SHIM_FAILED surface=$surface ready_flag=$ready_flag media=$media" | tee -a "$log" /dev/console
+    exit 66
+fi
+
+# Stock splashplayer publishes readiness only after the VPU and Wayland surface
+# are initialized. Preserve that observable ordering so MMUI has installed its
+# Service Manager subscription before tranlogo transitions to RUNNING.
+sleep 1
+mkdir -p "${ready_flag%/*}"
+echo "$$" > "$ready_flag"
+echo "CMU_SPLASHPLAYER_SHIM_READY pid=$$ surface=$surface loop=$loop media=$media" | tee -a "$log" /dev/console
+
+cleanup() {
+    rm -f "$ready_flag"
+    echo "CMU_SPLASHPLAYER_SHIM_STOPPED pid=$$ surface=$surface" | tee -a "$log" /dev/console
+    exit 0
+}
+trap cleanup HUP INT QUIT TERM
+
+if [ "$loop" = "1" ]; then
+    while :; do
+        sleep 3600 &
+        wait $!
+    done
+fi
+
+# The CMU's one-shot IVF logos are short. Keeping the process alive after the
+# ready flag appears gives Service Manager time to publish RUNNING before the
+# normal exit publishes STOPPED to MMUI.
+sleep 2
+rm -f "$ready_flag"
+echo "CMU_SPLASHPLAYER_SHIM_COMPLETED pid=$$ surface=$surface" | tee -a "$log" /dev/console
+if printf 'splash-complete surface=%s\n' "$surface" | nc -w 2 10.0.2.2 2990; then
+    echo "CMU_SPLASHPLAYER_SHIM_NOTIFIED surface=$surface endpoint=10.0.2.2:2990" | tee -a "$log" /dev/console
+else
+    echo "CMU_SPLASHPLAYER_SHIM_NOTIFY_FAILED surface=$surface endpoint=10.0.2.2:2990" | tee -a "$log" /dev/console
+    exit 69
+fi
 """
 
 INIT_SCRIPT = """#!/bin/busybox sh
@@ -351,8 +484,21 @@ export JCI_HMI_BUS="unix:path=/tmp/dbus_hmi_socket"
 echo "$SERVICE_DBUS_PID" > /tmp/dbus_service.pid
 echo "$HMI_DBUS_PID" > /tmp/dbus_hmi.pid
 echo "$SYSTEM_DBUS_PID" > /tmp/lvds_service.pid
-echo "$SYSTEM_DBUS_PID" > /var/run/nativeguictrl.pid
 echo "$SYSTEM_DBUS_PID" > /tmp/vim_app.pid
+
+/jci/emulator/nativeguictrl-shim &
+NATIVEGUICTRL_PID=$!
+for attempt in 1 2 3 4 5; do
+    [ -s /var/run/nativeguictrl.pid ] && break
+    sleep 1
+done
+if [ "$(cat /var/run/nativeguictrl.pid 2>/dev/null)" = "$NATIVEGUICTRL_PID" ] && \
+   kill -0 "$NATIVEGUICTRL_PID" 2>/dev/null; then
+    echo "CMU_NATIVEGUICTRL_READY pid=$NATIVEGUICTRL_PID implementation=headless-shim"
+else
+    echo "CMU_NATIVEGUICTRL_FAILED pid=$NATIVEGUICTRL_PID" >&2
+    CMU_NATIVE_READY=0
+fi
 
 /jci/sm/sm >/tmp/sm.log 2>&1 &
 SM_PID=$!
@@ -603,6 +749,32 @@ def generate_emulator_sm_conf(rootfs: pathlib.Path, destination: pathlib.Path) -
     (destination / "jci/sm/sm.conf").write_text(content, encoding="utf-8")
 
 
+def install_display_lifecycle_shims(destination: pathlib.Path) -> dict[str, str]:
+    """Install headless adapters for the CMU's unavailable Wayland/VPU edge."""
+    emulator_root = destination / "jci/emulator"
+    stock_root = emulator_root / "stock"
+    stock_root.mkdir(parents=True, exist_ok=True)
+
+    stock_nativeguictrl = destination / "jci/nativegui/svcjcinativeguictrl"
+    stock_splashplayer = destination / "usr/bin/splashplayer"
+    shutil.copy2(stock_nativeguictrl, stock_root / "svcjcinativeguictrl")
+    shutil.copy2(stock_splashplayer, stock_root / "splashplayer")
+
+    nativeguictrl_shim = emulator_root / "nativeguictrl-shim"
+    nativeguictrl_shim.write_text(NATIVEGUICTRL_SHIM, encoding="utf-8")
+    nativeguictrl_shim.chmod(0o755)
+
+    stock_splashplayer.write_text(SPLASHPLAYER_SHIM, encoding="utf-8")
+    stock_splashplayer.chmod(0o755)
+
+    return {
+        "nativeguictrl": str(nativeguictrl_shim.relative_to(destination)),
+        "stockNativeguictrl": str((stock_root / "svcjcinativeguictrl").relative_to(destination)),
+        "splashplayer": str(stock_splashplayer.relative_to(destination)),
+        "stockSplashplayer": str((stock_root / "splashplayer").relative_to(destination)),
+    }
+
+
 def write_hardware_seed(destination: pathlib.Path) -> dict[str, object]:
     """Create the writable Stage 4 sysfs seed tree in the initramfs."""
     with NVRAM_DEFAULTS_PATH.open(encoding="utf-8") as source:
@@ -761,6 +933,7 @@ def build_tree(
     )
 
     generate_emulator_sm_conf(rootfs, destination)
+    display_lifecycle = install_display_lifecycle_shims(destination)
 
     for config_name, socket_path in (
         ("system.conf", "/run/dbus/system_bus_socket"),
@@ -780,6 +953,7 @@ def build_tree(
     init = destination / "init"
     init.write_text(INIT_SCRIPT, encoding="utf-8")
     init.chmod(0o755)
+    hardware_shims["displayLifecycle"] = display_lifecycle
     return native_files, kernel_modules, hardware_shims
 
 
@@ -798,7 +972,7 @@ def build_archive(tree: pathlib.Path, output: pathlib.Path) -> None:
     )
     cpio_input = b"\0".join(path.encode("utf-8") for path in paths) + b"\0"
     result = subprocess.run(
-        ["cpio", "--null", "-o", "--format=newc", "--quiet"],
+        ["cpio", "--null", "-o", "--format=newc", "--reproducible", "--quiet"],
         cwd=tree,
         input=cpio_input,
         capture_output=True,
@@ -845,8 +1019,8 @@ def build(
         "archive": str(archive),
         "archiveSha256": file_sha256(archive),
         "nativeFiles": native_files,
-        "nativeServices": ["dbus-daemon:system", "dbus-daemon:service", "dbus-daemon:hmi", "sm", "jciAppsdk", "jciDbapi", "jciMMUI", "settings"],
-        "purpose": "generic ARM full-system Stage 4 hardware shim and real messaging proof",
+        "nativeServices": ["dbus-daemon:system", "dbus-daemon:service", "dbus-daemon:hmi", "sm", "nativeguictrl:headless", "splashplayer:headless", "jciAppsdk", "jciDbapi", "jciMMUI", "settings"],
+        "purpose": "generic ARM full-system hardware and display-lifecycle shim with real messaging proof",
     }
     (output_dir / "manifest.json").write_text(
         json.dumps(metadata, indent=2) + "\n",
