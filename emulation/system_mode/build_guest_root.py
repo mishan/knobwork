@@ -37,8 +37,9 @@ DEFAULT_OUTPUT = pathlib.Path(__file__).resolve().parent / "build"
 DEFAULT_INSTALLER_INITRD = (
     pathlib.Path(__file__).resolve().parent / "cache" / "debian-installer-initrd.gz"
 )
+NVRAM_DEFAULTS_PATH = pathlib.Path(__file__).resolve().parent.parent / "shims" / "nvram_defaults.json"
 KERNEL_VERSION = "6.12.38+deb13-armmp"
-NETWORK_KERNEL_MODULES = (
+GUEST_KERNEL_MODULES = (
     (
         f"usr/lib/modules/{KERNEL_VERSION}/kernel/drivers/virtio/virtio_mmio.ko.xz",
         f"lib/modules/{KERNEL_VERSION}/kernel/drivers/virtio/virtio_mmio.ko",
@@ -55,7 +56,30 @@ NETWORK_KERNEL_MODULES = (
         f"usr/lib/modules/{KERNEL_VERSION}/kernel/drivers/net/virtio_net.ko.xz",
         f"lib/modules/{KERNEL_VERSION}/kernel/drivers/net/virtio_net.ko",
     ),
+    (
+        f"usr/lib/modules/{KERNEL_VERSION}/kernel/drivers/virtio/virtio_input.ko.xz",
+        f"lib/modules/{KERNEL_VERSION}/kernel/drivers/virtio/virtio_input.ko",
+    ),
+    (
+        f"usr/lib/modules/{KERNEL_VERSION}/kernel/drivers/input/evdev.ko.xz",
+        f"lib/modules/{KERNEL_VERSION}/kernel/drivers/input/evdev.ko",
+    ),
 )
+
+GPIO_DEFAULTS = {
+    "CAN_Day_Mode": ("0", "in"),
+    "DI_TP1029": ("0", "in"),
+    "DI_TP1056": ("0", "in"),
+    "DO_HOST1_PWR": ("0", "out"),
+    "DO_OTG_PWR": ("0", "out"),
+    "Reset VIP": ("0", "out"),
+    "gpio0": ("0", "in"),
+}
+
+MTD_DEFAULTS = {
+    "mtd0": {"name": "config", "size": "1048576"},
+    "mtd1": {"name": "data", "size": "4194304"},
+}
 BUSYBOX_LIBRARIES = ("ld-linux.so.3", "libc.so.6", "libm.so.6")
 LIBRARY_SEARCH_DIRECTORIES = ("jci/lib", "usr/lib", "lib")
 
@@ -126,11 +150,14 @@ mount -t mqueue mqueue /dev/mqueue 2>/dev/null || true
 mount -t tmpfs tmpfs /dev/shm
 
 CMU_NATIVE_READY=1
+CMU_HARDWARE_READY=1
 for module in \
     /lib/modules/6.12.38+deb13-armmp/kernel/drivers/virtio/virtio_mmio.ko \
     /lib/modules/6.12.38+deb13-armmp/kernel/net/core/failover.ko \
     /lib/modules/6.12.38+deb13-armmp/kernel/drivers/net/net_failover.ko \
-    /lib/modules/6.12.38+deb13-armmp/kernel/drivers/net/virtio_net.ko; do
+    /lib/modules/6.12.38+deb13-armmp/kernel/drivers/net/virtio_net.ko \
+    /lib/modules/6.12.38+deb13-armmp/kernel/drivers/virtio/virtio_input.ko \
+    /lib/modules/6.12.38+deb13-armmp/kernel/drivers/input/evdev.ko; do
     if insmod "$module"; then
         echo "CMU_KERNEL_MODULE_READY module=${module##*/}"
     else
@@ -139,11 +166,39 @@ for module in \
     fi
 done
 
-# --- Stage 4: /dev/input stubs (keep jciMMUI alive) ---
-for dev in keyboard0 keyboard1 mouse0 mouse1 filtered-keyboard0 filtered-mouse0 filtered-touchscreen0 event0 event1 event2 event3; do
-    mknod /dev/input/$dev c 1 3 2>/dev/null || touch /dev/input/$dev
-    chmod 666 /dev/input/$dev
+# --- Stage 4: real virtio evdev devices under Mazda's expected names ---
+keyboard_event=""
+tablet_event=""
+for attempt in 1 2 3 4 5; do
+    for event_dir in /sys/class/input/event*; do
+        [ -r "$event_dir/device/name" ] || continue
+        input_name=$(cat "$event_dir/device/name")
+        case "$input_name" in
+            *Virtio*Keyboard*) keyboard_event="/dev/input/${event_dir##*/}" ;;
+            *Virtio*Tablet*) tablet_event="/dev/input/${event_dir##*/}" ;;
+        esac
+    done
+    [ -n "$keyboard_event" ] && [ -n "$tablet_event" ] && break
+    sleep 1
 done
+
+if [ -c "$keyboard_event" ] && [ -c "$tablet_event" ]; then
+    chmod 666 "$keyboard_event" "$tablet_event"
+    for dev in keyboard0 keyboard1 filtered-keyboard0; do
+        ln -sf "$keyboard_event" "/dev/input/$dev"
+    done
+    for dev in mouse0 mouse1 filtered-mouse0 filtered-touchscreen0; do
+        ln -sf "$tablet_event" "/dev/input/$dev"
+    done
+    echo "CMU_INPUT_SHIM_READY keyboard=$keyboard_event touchscreen=$tablet_event"
+else
+    for dev in keyboard0 keyboard1 filtered-keyboard0 mouse0 mouse1 filtered-mouse0 filtered-touchscreen0; do
+        ln -sf /dev/null "/dev/input/$dev"
+    done
+    echo "CMU_INPUT_SHIM_FAILED keyboard=$keyboard_event touchscreen=$tablet_event" >&2
+    CMU_NATIVE_READY=0
+    CMU_HARDWARE_READY=0
+fi
 
 # --- Stage 4: Writable Mazda classes merged with the real QEMU classes ---
 # Preserve QEMU's net/tty/input/etc. classes through a second bind mount. The
@@ -158,37 +213,47 @@ for class_path in /tmp/sys_class_real/*; do
     ln -s "$class_path" "/tmp/sys_class_shim/$class_name"
 done
 
-mkdir -p /tmp/sys_class_shim/nvram/nv-config/keys
-mkdir -p /tmp/sys_class_shim/gpio
-mkdir -p /tmp/sys_class_shim/mtd/mtd0 /tmp/sys_class_shim/mtd/mtd1
-
-# Populate NVRAM keys
-for key in lvds_bright_mode lvds_bright_day lvds_bright_night lvds_contrast_day lvds_contrast_night lvds_hdcp_mode lvds_display_type lvds_speed_restriction bus_bcm_speed_restriction; do
-    echo "disable" > /tmp/sys_class_shim/nvram/nv-config/keys/$key
-done
-echo "50" > /tmp/sys_class_shim/nvram/nv-config/keys/lvds_bright_day
-echo "25" > /tmp/sys_class_shim/nvram/nv-config/keys/lvds_bright_night
-echo "50" > /tmp/sys_class_shim/nvram/nv-config/keys/lvds_contrast_day
-echo "50" > /tmp/sys_class_shim/nvram/nv-config/keys/lvds_contrast_night
-echo "auto" > /tmp/sys_class_shim/nvram/nv-config/keys/lvds_bright_mode
-echo "jci" > /tmp/sys_class_shim/nvram/nv-config/keys/lvds_display_type
-touch /tmp/sys_class_shim/nvram/nv-config/add
-touch /tmp/sys_class_shim/nvram/nv-config/commit
-
-# Populate GPIO pins
-for pin in DI_TP1056 DI_TP1029 "Reset VIP" DO_HOST1_PWR DO_OTG_PWR gpio0; do
-    mkdir -p "/tmp/sys_class_shim/gpio/$pin"
-    echo "0" > "/tmp/sys_class_shim/gpio/$pin/value"
-    echo "in" > "/tmp/sys_class_shim/gpio/$pin/direction"
-done
-
-# Populate MTD partitions
-echo "config" > /tmp/sys_class_shim/mtd/mtd0/name
-echo "1048576" > /tmp/sys_class_shim/mtd/mtd0/size
-echo "data" > /tmp/sys_class_shim/mtd/mtd1/name
-echo "4194304" > /tmp/sys_class_shim/mtd/mtd1/size
+cp -a /etc/cmu-emulator/sys-class/nvram /tmp/sys_class_shim/
+cp -a /etc/cmu-emulator/sys-class/gpio /tmp/sys_class_shim/
+cp -a /etc/cmu-emulator/sys-class/mtd /tmp/sys_class_shim/
 
 mount --bind /tmp/sys_class_shim /sys/class
+
+if [ -r /sys/class/nvram/nv-config/keys/lvds_bright_mode ] && \
+   [ -w /sys/class/nvram/nv-config/add ] && \
+   [ -w /sys/class/nvram/nv-config/commit ]; then
+    echo "CMU_NVRAM_SHIM_READY keys=$(find /sys/class/nvram/nv-config/keys -type f | wc -l)"
+else
+    echo "CMU_NVRAM_SHIM_FAILED" >&2
+    CMU_NATIVE_READY=0
+    CMU_HARDWARE_READY=0
+fi
+
+if [ "$(cat /sys/class/gpio/CAN_Day_Mode/value 2>/dev/null)" = "0" ] && \
+   [ -w "/sys/class/gpio/Reset VIP/value" ]; then
+    echo "CMU_GPIO_SHIM_READY day_mode=0 board=cmu150"
+else
+    echo "CMU_GPIO_SHIM_FAILED" >&2
+    CMU_NATIVE_READY=0
+    CMU_HARDWARE_READY=0
+fi
+
+if [ "$(cat /sys/class/mtd/mtd0/name 2>/dev/null)" = "config" ] && \
+   [ "$(cat /sys/class/mtd/mtd1/name 2>/dev/null)" = "data" ]; then
+    echo "CMU_MTD_SHIM_READY partitions=config,data"
+else
+    echo "CMU_MTD_SHIM_FAILED" >&2
+    CMU_NATIVE_READY=0
+    CMU_HARDWARE_READY=0
+fi
+
+if [ -r /usr/share/alsa/alsa.conf ] && [ -r /usr/share/alsa/pcm/default.conf ]; then
+    echo "CMU_ALSA_DATA_READY"
+else
+    echo "CMU_ALSA_DATA_FAILED" >&2
+    CMU_NATIVE_READY=0
+    CMU_HARDWARE_READY=0
+fi
 
 # --- Stage 4: Watchdog recording endpoint ---
 mkdir -p /tmp/watchdog_shim
@@ -196,9 +261,29 @@ touch /tmp/watchdog_shim/watchdog.log
 mkfifo /tmp/watchdog_fifo 2>/dev/null || true
 (while cat /tmp/watchdog_fifo >> /tmp/watchdog_shim/watchdog.log 2>/dev/null; do :; done) &
 ln -sf /tmp/watchdog_fifo /dev/watchdog 2>/dev/null || true
+if [ -p /tmp/watchdog_fifo ] && [ -L /dev/watchdog ]; then
+    echo "CMU_WATCHDOG_SHIM_READY log=/tmp/watchdog_shim/watchdog.log"
+else
+    echo "CMU_WATCHDOG_SHIM_FAILED" >&2
+    CMU_NATIVE_READY=0
+    CMU_HARDWARE_READY=0
+fi
 
 # --- Stage 4: Removable media mount points ---
 mkdir -p /mnt/jmsa1 /mnt/jmsb1 /mnt/sda1
+if [ -d /mnt/jmsa1 ] && [ -d /mnt/jmsb1 ] && [ -d /mnt/sda1 ]; then
+    echo "CMU_MEDIA_SHIM_READY mountpoints=jmsa1,jmsb1,sda1"
+else
+    echo "CMU_MEDIA_SHIM_FAILED" >&2
+    CMU_NATIVE_READY=0
+    CMU_HARDWARE_READY=0
+fi
+
+if [ "$CMU_HARDWARE_READY" = "1" ]; then
+    echo "CMU_HARDWARE_SHIMS_READY"
+else
+    echo "CMU_HARDWARE_SHIMS_FAILED" >&2
+fi
 
 ifconfig lo 127.0.0.1 up 2>/dev/null || true
 if ifconfig eth0 10.0.2.15 netmask 255.255.255.0 up 2>/dev/null; then
@@ -304,6 +389,30 @@ else
     echo "CMU_MMUI_FAILED" >&2
     CMU_NATIVE_READY=0
     cat /tmp/jciMMUI.log >&2 2>/dev/null
+fi
+
+if grep -E -q 'Failed to open directory .*/sys/class/nvram|NVRAM read exception' \
+        /tmp/sm.log /tmp/syslog.log 2>/dev/null; then
+    echo "CMU_NVRAM_CONSUMER_FAILED" >&2
+    CMU_NATIVE_READY=0
+else
+    echo "CMU_NVRAM_CONSUMER_READY service=jciBLMSettings"
+fi
+
+if grep -E -q 'TUI_OpenReader.*IOCTL error|TUI reader thread: error in reading' \
+        /tmp/sm.log /tmp/syslog.log 2>/dev/null; then
+    echo "CMU_INPUT_CONSUMER_FAILED" >&2
+    CMU_NATIVE_READY=0
+else
+    echo "CMU_INPUT_CONSUMER_READY service=jciMMUI"
+fi
+
+if grep -q 'Cannot access file /usr/share/alsa/alsa.conf' \
+        /tmp/sm.log /tmp/syslog.log 2>/dev/null; then
+    echo "CMU_ALSA_CONFIG_CONSUMER_FAILED" >&2
+    CMU_NATIVE_READY=0
+else
+    echo "CMU_ALSA_CONFIG_CONSUMER_READY service=jciBLMSettings"
 fi
 
 if [ "$CMU_NATIVE_READY" = "1" ]; then
@@ -494,13 +603,53 @@ def generate_emulator_sm_conf(rootfs: pathlib.Path, destination: pathlib.Path) -
     (destination / "jci/sm/sm.conf").write_text(content, encoding="utf-8")
 
 
-def install_network_modules(
+def write_hardware_seed(destination: pathlib.Path) -> dict[str, object]:
+    """Create the writable Stage 4 sysfs seed tree in the initramfs."""
+    with NVRAM_DEFAULTS_PATH.open(encoding="utf-8") as source:
+        nvram_defaults = json.load(source)
+    if not isinstance(nvram_defaults, dict) or not nvram_defaults:
+        raise ValueError(f"invalid NVRAM defaults: {NVRAM_DEFAULTS_PATH}")
+
+    seed_root = destination / "etc/cmu-emulator/sys-class"
+    keys_root = seed_root / "nvram/nv-config/keys"
+    keys_root.mkdir(parents=True, exist_ok=True)
+    for key, value in sorted(nvram_defaults.items()):
+        if not re.fullmatch(r"[A-Za-z0-9_]+", key) or not isinstance(value, str):
+            raise ValueError(f"invalid NVRAM default: {key!r}={value!r}")
+        (keys_root / key).write_text(value + "\n", encoding="utf-8")
+    (seed_root / "nvram/nv-config/add").touch()
+    (seed_root / "nvram/nv-config/commit").touch()
+
+    gpio_root = seed_root / "gpio"
+    for pin, (value, direction) in sorted(GPIO_DEFAULTS.items()):
+        pin_root = gpio_root / pin
+        pin_root.mkdir(parents=True, exist_ok=True)
+        (pin_root / "value").write_text(value + "\n", encoding="utf-8")
+        (pin_root / "direction").write_text(direction + "\n", encoding="utf-8")
+
+    mtd_root = seed_root / "mtd"
+    for partition, attributes in sorted(MTD_DEFAULTS.items()):
+        partition_root = mtd_root / partition
+        partition_root.mkdir(parents=True, exist_ok=True)
+        for name, value in sorted(attributes.items()):
+            (partition_root / name).write_text(value + "\n", encoding="utf-8")
+
+    return {
+        "nvramDefaults": str(NVRAM_DEFAULTS_PATH),
+        "nvramDefaultsSha256": file_sha256(NVRAM_DEFAULTS_PATH),
+        "nvramKeyCount": len(nvram_defaults),
+        "gpioPins": sorted(GPIO_DEFAULTS),
+        "mtdPartitions": MTD_DEFAULTS,
+    }
+
+
+def install_kernel_modules(
     installer_initrd: pathlib.Path,
     destination: pathlib.Path,
 ) -> dict[str, str]:
-    """Extract the exact network module closure paired with the tested kernel."""
+    """Extract the exact network/input modules paired with the tested kernel."""
     installer_initrd = installer_initrd.resolve(strict=True)
-    source_paths = [source for source, _target in NETWORK_KERNEL_MODULES]
+    source_paths = [source for source, _target in GUEST_KERNEL_MODULES]
 
     with tempfile.TemporaryDirectory(prefix="cmu-kernel-modules-") as temp_dir:
         extract_root = pathlib.Path(temp_dir)
@@ -530,7 +679,7 @@ def install_network_modules(
             )
 
         installed: dict[str, str] = {}
-        for source_relative, target_relative in NETWORK_KERNEL_MODULES:
+        for source_relative, target_relative in GUEST_KERNEL_MODULES:
             source = extract_root / source_relative
             if not source.is_file():
                 raise FileNotFoundError(
@@ -549,7 +698,7 @@ def build_tree(
     rootfs: pathlib.Path,
     installer_initrd: pathlib.Path,
     destination: pathlib.Path,
-) -> tuple[list[str], dict[str, str]]:
+) -> tuple[list[str], dict[str, str], dict[str, object]]:
     required_entries = (
         *NATIVE_SERVICE_FILES,
         *NATIVE_DATA_DIRECTORIES,
@@ -589,7 +738,8 @@ def build_tree(
         copy_rootfs_dir(rootfs, rootfs / rel_dir, destination)
 
     native_files = copy_elf_closure(rootfs, destination, NATIVE_SERVICE_FILES)
-    kernel_modules = install_network_modules(installer_initrd, destination)
+    kernel_modules = install_kernel_modules(installer_initrd, destination)
+    hardware_shims = write_hardware_seed(destination)
     for relative_file in NATIVE_DATA_FILES:
         copy_rootfs_entry(rootfs, rootfs / relative_file, destination)
 
@@ -630,10 +780,15 @@ def build_tree(
     init = destination / "init"
     init.write_text(INIT_SCRIPT, encoding="utf-8")
     init.chmod(0o755)
-    return native_files, kernel_modules
+    return native_files, kernel_modules, hardware_shims
 
 
 def build_archive(tree: pathlib.Path, output: pathlib.Path) -> None:
+    # CPIO records mtimes. Normalize both copied stock files and generated shim
+    # files so the same inputs always produce the same compressed archive.
+    for archive_path in (tree, *sorted(tree.rglob("*"))):
+        os.utime(archive_path, (0, 0), follow_symlinks=False)
+
     paths = ["."]
     paths.extend(
         sorted(
@@ -671,7 +826,9 @@ def build(
 
     with tempfile.TemporaryDirectory(prefix="cmu-initramfs-", dir=output_dir) as temp_dir:
         tree = pathlib.Path(temp_dir)
-        native_files, kernel_modules = build_tree(rootfs, installer_initrd, tree)
+        native_files, kernel_modules, hardware_shims = build_tree(
+            rootfs, installer_initrd, tree
+        )
         build_archive(tree, archive)
 
     metadata = {
@@ -684,11 +841,12 @@ def build(
         "installerInitrdSha256": file_sha256(installer_initrd),
         "kernelVersion": KERNEL_VERSION,
         "kernelModules": kernel_modules,
+        "hardwareShims": hardware_shims,
         "archive": str(archive),
         "archiveSha256": file_sha256(archive),
         "nativeFiles": native_files,
         "nativeServices": ["dbus-daemon:system", "dbus-daemon:service", "dbus-daemon:hmi", "sm", "jciAppsdk", "jciDbapi", "jciMMUI", "settings"],
-        "purpose": "generic ARM full-system Stage 3 real messaging backend proof",
+        "purpose": "generic ARM full-system Stage 4 hardware shim and real messaging proof",
     }
     (output_dir / "manifest.json").write_text(
         json.dumps(metadata, indent=2) + "\n",

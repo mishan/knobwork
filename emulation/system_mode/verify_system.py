@@ -16,6 +16,17 @@ SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 DEFAULT_KERNEL = SCRIPT_DIR / "cache/vmlinuz-armmp"
 DEFAULT_INITRAMFS = SCRIPT_DIR / "build/initramfs.cpio.gz"
 REQUIRED_MARKERS = (
+    "CMU_INPUT_SHIM_READY",
+    "CMU_NVRAM_SHIM_READY",
+    "CMU_GPIO_SHIM_READY",
+    "CMU_MTD_SHIM_READY",
+    "CMU_ALSA_DATA_READY",
+    "CMU_WATCHDOG_SHIM_READY",
+    "CMU_MEDIA_SHIM_READY",
+    "CMU_HARDWARE_SHIMS_READY",
+    "CMU_NVRAM_CONSUMER_READY",
+    "CMU_INPUT_CONSUMER_READY",
+    "CMU_ALSA_CONFIG_CONSUMER_READY",
     "CMU_NETWORK_READY",
     "CMU_DBUS_READY",
     "CMU_SERVICE_DBUS_READY",
@@ -126,8 +137,8 @@ def verify(kernel: pathlib.Path, initramfs: pathlib.Path, timeout: float) -> int
         return 1
 
     print(
-        "[VERIFY-SYSTEM] PASS: owned qemu-system-arm boot reached all D-Bus "
-        "and native MMUI/AppSDK/DBAPI readiness markers"
+        "[VERIFY-SYSTEM] PASS: owned qemu-system-arm boot reached all Stage 4 "
+        "hardware-shim, D-Bus, and native MMUI/AppSDK/DBAPI readiness markers"
     )
     return 0
 

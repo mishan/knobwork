@@ -28,8 +28,8 @@ emulation.
 
 ## Implemented and verified baseline
 
-As of 2026-08-29, the repository has working implementations for the first
-three layers:
+As of 2026-08-30, the repository has working implementations for the first
+four stages:
 
 - **Browser HMI:** serves the unmodified v74 `jci/gui` tree, translates the
   Opera CSS needed by modern browsers, preserves the stock WebSocket parser,
@@ -48,9 +48,12 @@ three layers:
   connection evidence, preserves WebSocket text/binary framing, and cannot use
   mock MMUI routing or synthetic browser startup state. The native proof reaches
   MMUI's genuine `system.IntroAnimation`; it does not claim Home/menu coverage.
-- **Hardware API shims (Stage 4, work in progress):** initial NVRAM, GPIO, MTD,
-  watchdog, ALSA-data, input-path, and removable-media experiments exist but
-  are not yet a verified hardware simulation layer.
+- **Hardware API shims (Stage 4):** the generated guest provides a writable
+  27-key NVRAM tree, GPIO and MTD metadata, a recording watchdog endpoint,
+  removable-media mount points, stock ALSA configuration data, and real QEMU
+  virtio keyboard/tablet devices exposed under MMUI's expected path names.
+  `verify-system` requires each shim and additionally rejects the old
+  jciBLMSettings NVRAM/ALSA-config and MMUI input error paths.
 
 ## Existing `mazda_emulation` repository
 
@@ -237,19 +240,32 @@ This should give high-fidelity UI/backend integration without stock GPU output.
 
 ### Stage 4: hardware API shims
 
-Prefer user-space shims before QEMU device models:
+Stage 4 uses file-compatible shims wherever normal file semantics are enough:
 
-- NVRAM key-value filesystem backed by a directory/SQLite file;
-- input devices via uinput or Unix sockets;
-- VIP/CAN trace playback and scenario scripting;
-- fake ignition, speed, reverse, illumination, and vehicle configuration;
-- harmless watchdog/reset endpoints that record requested actions;
-- virtual removable media and update-package insertion;
-- deterministic clock and fault injection;
-- optional ALSA loopback for audio state testing.
+- `emulation/shims/nvram_defaults.json` is the single source for 27 startup
+  keys found in stock binaries and scripts. The guest exports them under
+  `/sys/class/nvram/nv-config`, including writable `add` and `commit` files.
+  `mock_nvram.py` uses the same defaults and can export an identical sysfs tree.
+- GPIO paths include the CMU150 board straps, power/reset outputs, and
+  `CAN_Day_Mode`; MTD exposes deterministic config/data partition metadata.
+- `/dev/watchdog` records writes through a FIFO instead of resetting the guest.
+- `/mnt/jmsa1`, `/mnt/jmsb1`, and `/mnt/sda1` exist for later media insertion.
+- Stock ALSA configuration is copied intact. No mixer device is emulated yet,
+  so mixer-attach failures remain expected and audio control is not functional.
 
-Use `LD_PRELOAD` only for narrow, measured boundaries. File/socket-compatible
-shims are easier to inspect and less sensitive to binary ABI details.
+Input is the measured exception to the user-space-first rule. Regular files and
+`/dev/null` accept `open(2)` but fail MMUI's evdev ioctls. QEMU therefore uses
+PCI virtio keyboard/tablet devices with the exact `virtio_input` and `evdev`
+modules extracted from the checksum-pinned Debian installer initrd. The guest
+maps their real event nodes to `filtered-keyboard0`, `filtered-mouse0`, and
+`filtered-touchscreen0`; MMUI's former ioctl/read-loop errors are now absent.
+The ARM `virt` machine uses `highmem=off` because this 32-bit kernel could not
+probe the high-memory PCI window.
+
+Remaining hardware work includes pollable GPIO change notification, an ALSA
+device/loopback, persistent NVRAM across guest boots, VIP/CAN wiring into the
+guest, deterministic clock/fault injection, and native GPU/display services.
+Use `LD_PRELOAD` only for narrow, measured boundaries.
 
 ### Stage 5: native renderer experiment
 
@@ -353,6 +369,11 @@ regression.
 The build output, downloaded kernel, and matching Debian installer initrd are
 ignored. `build-guest` treats the extracted firmware tree as read-only input,
 always derives its generated `sm.conf` from the stock `jci/sm/sm.conf`, extracts
-only the exact `virtio_mmio`/`failover`/`net_failover`/`virtio_net` module closure,
-records all input and module SHA-256 values, and fails when a required service
-binary, shared library, or kernel module is missing.
+only the exact network and input module closure, records all input, shim, and
+module SHA-256 values, and fails when a required service binary, shared library,
+kernel module, or hardware seed is missing.
+
+The v74 update tree contains an `audiosettings` app without its optional app
+stylesheet. The harness returns an allowlisted empty CSS response for that one
+path and records the use in `/__emu/health`; other missing stylesheets still
+surface as browser errors.

@@ -4,13 +4,20 @@ Stage 4: NVRAM Key-Value File & Sysfs Shim
 Provides SQLite/JSON storage for Mazda CMU NVRAM keys and system state parameters.
 """
 
-import os
-import sys
-import sqlite3
-import json
 import argparse
+import json
+import os
+import pathlib
+import re
+import sqlite3
 
 DEFAULT_DB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "nvram_store.db")
+DEFAULTS_PATH = pathlib.Path(__file__).with_name("nvram_defaults.json")
+
+
+def load_defaults():
+    with DEFAULTS_PATH.open(encoding="utf-8") as source:
+        return json.load(source)
 
 class NVRAMShim:
     def __init__(self, db_path=DEFAULT_DB):
@@ -26,23 +33,14 @@ class NVRAMShim:
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
-            # Seed default CMU NVRAM settings if empty
+            # Add newly discovered defaults without overwriting user state.
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM nvram")
-            if cursor.fetchone()[0] == 0:
-                defaults = {
-                    "vehicle_type": "J36",
-                    "region": "NA",
-                    "language": "en_US",
-                    "speed": "0",
-                    "gear": "PARK",
-                    "ignition": "ON",
-                    "audio_volume": "15",
-                    "display_theme": "DisplayTheme_02"
-                }
-                for k, v in defaults.items():
-                    cursor.execute("INSERT INTO nvram (key, value) VALUES (?, ?)", (k, v))
-                conn.commit()
+            for key, value in load_defaults().items():
+                cursor.execute(
+                    "INSERT OR IGNORE INTO nvram (key, value) VALUES (?, ?)",
+                    (key, value),
+                )
+            conn.commit()
 
     def get(self, key):
         with sqlite3.connect(self.db_path) as conn:
@@ -63,16 +61,17 @@ class NVRAMShim:
             return dict(cursor.fetchall())
 
     def seed_sysfs(self, target_dir):
-        keys_dir = os.path.join(target_dir, "nv-config", "keys")
-        os.makedirs(keys_dir, exist_ok=True)
+        target = pathlib.Path(target_dir)
+        keys_dir = target / "nv-config" / "keys"
+        keys_dir.mkdir(parents=True, exist_ok=True)
         store = self.dump()
-        for k, v in store.items():
-            key_file = os.path.join(keys_dir, k)
-            with open(key_file, "w") as f:
-                f.write(f"{v}\n")
-        open(os.path.join(target_dir, "nv-config", "add"), "a").close()
-        open(os.path.join(target_dir, "nv-config", "commit"), "a").close()
-        print(f"[NVRAM] Seeded sysfs tree at {target_dir} with {len(store)} keys.")
+        for key, value in sorted(store.items()):
+            if not re.fullmatch(r"[A-Za-z0-9_]+", key):
+                raise ValueError(f"unsafe NVRAM key for sysfs export: {key!r}")
+            (keys_dir / key).write_text(f"{value}\n", encoding="utf-8")
+        (target / "nv-config" / "add").touch()
+        (target / "nv-config" / "commit").touch()
+        print(f"[NVRAM] Seeded sysfs tree at {target} with {len(store)} keys.")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Mazda CMU Mock NVRAM Manager")
@@ -80,9 +79,10 @@ if __name__ == "__main__":
     parser.add_argument("--set", nargs=2, metavar=("KEY", "VAL"), help="Set value for NVRAM key")
     parser.add_argument("--dump", action="store_true", help="Dump all NVRAM key-value pairs")
     parser.add_argument("--seed-sysfs", metavar="DIR", help="Export NVRAM sysfs directory structure")
+    parser.add_argument("--db", default=DEFAULT_DB, help="SQLite backing store path")
     args = parser.parse_args()
 
-    nvram = NVRAMShim()
+    nvram = NVRAMShim(args.db)
     if args.get:
         val = nvram.get(args.get)
         print(f"{args.get} = {val}" if val is not None else f"Key '{args.get}' not found.")

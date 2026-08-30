@@ -64,9 +64,11 @@ python3 emulate.py verify-system
 ```
 
 The full-system regression owns the QEMU process and requires readiness from
-all three stock D-Bus daemons, Service Manager, MMUI, AppSDK, and DBAPI. It
-fails if QEMU's host-forward ports are already occupied rather than treating
-an unrelated listener as a passing guest.
+the Stage 4 NVRAM/GPIO/MTD/watchdog/media/ALSA-data/virtio-input layer, all three
+stock D-Bus daemons, Service Manager, MMUI, AppSDK, and DBAPI. It also verifies
+that MMUI and jciBLMSettings avoided their former input, NVRAM, and missing-ALSA
+configuration error paths. Occupied QEMU host-forward ports fail verification
+rather than allowing an unrelated listener to count as a passing guest.
 
 For native browser-to-guest verification, leave the system guest running and
 use two additional terminals:

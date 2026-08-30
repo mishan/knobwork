@@ -4,3 +4,7 @@ node_modules/
 /emulation/harness/artifacts/
 /emulation/system_mode/build/
 /emulation/system_mode/cache/
+__pycache__/
+*.py[cod]
+*.core
+/emulation/shims/nvram_store.db

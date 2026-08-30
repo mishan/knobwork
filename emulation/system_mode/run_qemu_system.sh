@@ -33,8 +33,13 @@ NETWORK=(
     -device virtio-net-device,netdev=net0
 )
 
+INPUT=(
+    -device virtio-keyboard-pci
+    -device virtio-tablet-pci
+)
+
 QEMU_ARGS=(
-    -machine virt
+    -machine virt,highmem=off
     -cpu cortex-a15
     -m "$MEMORY"
     -smp "$CPUS"
@@ -42,6 +47,7 @@ QEMU_ARGS=(
     -initrd "$INITRAMFS"
     -append "console=ttyAMA0 rdinit=/init panic=-1 ${QEMU_KERNEL_ARGS:-}"
     "${NETWORK[@]}"
+    "${INPUT[@]}"
     -nographic
     -no-reboot
 )
