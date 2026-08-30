@@ -37,25 +37,20 @@ three layers:
 - **ARM user mode:** executes stock Mazda ARM BusyBox, D-Bus, and `smctl`
   binaries with `qemu-arm`; the syntax gate checks all 2,646 HMI JavaScript
   files.
-- **Generic ARM system mode:** boots a maintained Debian ARM kernel on QEMU
-  `virt` with two ARMv7 CPUs and a generated initramfs containing stock Mazda
-  BusyBox, the stock Mazda D-Bus 1.6.4 daemon, and their stock runtime
-  libraries. It verifies the live bus socket, reaches a serial shell, and
-  emits `CMU_DBUS_READY` followed by `CMU_EMULATOR_READY`.
-
-The browser regression is not a process-only smoke test. It launches a clean
-headless Chrome instance at exactly 800x480 and verifies:
-
-1. all three GUI sockets are open;
-2. the framework is idle in `system/HomeScreen` with an empty queue;
-3. native commander input rotates to Applications;
-4. Enter opens the stock Applications screen;
-5. Back returns to HomeScreen;
-6. no browser runtime errors occurred; and
-7. the proof screenshot is exactly 800x480.
-
-This is a functional development baseline, not yet a full CMU service stack.
-The generic guest does not yet run real MMUI/AppSDK/DBAPI services.
+- **Generic ARM system mode and real messaging backend (Stage 3):** boots a
+  maintained Debian ARM kernel on QEMU `virt` with two ARMv7 CPUs and a
+  generated initramfs containing stock Mazda BusyBox, three D-Bus daemons,
+  Service Manager (`sm`), `settings`, `jciBLMSettings`, `jciMMUI` (port
+  2700), `jciAppsdk` (port 2800), and `jciDbapi` (port 2766).
+- **Strict backend provenance (Stage 3.5):** `verify-system` launches and owns
+  QEMU and requires readiness markers for every D-Bus bus, SM, MMUI, AppSDK,
+  and DBAPI. Native UI proxy mode is fail-closed, exposes per-service
+  connection evidence, preserves WebSocket text/binary framing, and cannot use
+  mock MMUI routing or synthetic browser startup state. The native proof reaches
+  MMUI's genuine `system.IntroAnimation`; it does not claim Home/menu coverage.
+- **Hardware API shims (Stage 4, work in progress):** initial NVRAM, GPIO, MTD,
+  watchdog, ALSA-data, input-path, and removable-media experiments exist but
+  are not yet a verified hardware simulation layer.
 
 ## Existing `mazda_emulation` repository
 
@@ -300,8 +295,8 @@ The current host has QEMU 11.1.0, Google Chrome, Node, Python, CPIO/gzip, and
 ext filesystem tools. The working baseline uses:
 
 - QEMU system ARM and user-mode ARM;
-- the pinned and SHA-256-checked Debian ARM installer kernel fetched by
-  `emulation/system_mode/fetch_kernel.py`;
+- the pinned and SHA-256-checked Debian ARM installer kernel and matching
+  installer initrd fetched by `emulation/system_mode/fetch_kernel.py`;
 - ext4 image tools;
 - CPIO/gzip (already present);
 - Node/browser automation for the UI side;
@@ -313,7 +308,7 @@ accepted until the new kernel has passed the system-mode regression.
 
 ## Running the verified baseline
 
-From `/path/to/workspace_improvement`:
+From `/path/to/workspace/mazda-cmu-tools`:
 
 ```sh
 # Terminal 1: stock browser HMI plus stateful mock backend
@@ -331,5 +326,33 @@ python3 emulate.py build-guest
 python3 emulate.py verify-system
 ```
 
-The build output and downloaded kernel are ignored. `build-guest` treats the
-extracted firmware tree as read-only input.
+To verify the browser against the native guest, keep `emulate.py system`
+running and use two additional terminals:
+
+```sh
+python3 emulate.py ui --proxy
+python3 emulate.py verify-ui --expect-mode proxy \
+  --screenshot emulation/harness/artifacts/ui-native.png
+```
+
+The mock and proxy regressions are intentionally distinct. Mock mode permits
+deterministic synthetic startup and menu routing, and verifies HomeScreen,
+commander navigation into Applications, and return to Home. Proxy mode requires
+live connections to all three QEMU-forwarded stock services, bidirectional MMUI
+text traffic, and zero mock fallback. Its current verified endpoint is native
+`system.IntroAnimation`, because the GPU `splashplayer`/`nativeguictrl` service
+lifecycle is not emulated. It intentionally does not synthesize the transition
+to Home.
+
+This also explains the native-mode menu-icon gap: unlike mock mode, proxy mode
+does not announce every optional application as available. Icons remain absent
+until the corresponding native services and StatusMenu availability events are
+running. That is a service-coverage limitation, not a missing-resource or CSS
+regression.
+
+The build output, downloaded kernel, and matching Debian installer initrd are
+ignored. `build-guest` treats the extracted firmware tree as read-only input,
+always derives its generated `sm.conf` from the stock `jci/sm/sm.conf`, extracts
+only the exact `virtio_mmio`/`failover`/`net_failover`/`virtio_net` module closure,
+records all input and module SHA-256 values, and fails when a required service
+binary, shared library, or kernel module is missing.

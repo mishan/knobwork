@@ -62,11 +62,24 @@ class NVRAMShim:
             cursor.execute("SELECT key, value FROM nvram")
             return dict(cursor.fetchall())
 
+    def seed_sysfs(self, target_dir):
+        keys_dir = os.path.join(target_dir, "nv-config", "keys")
+        os.makedirs(keys_dir, exist_ok=True)
+        store = self.dump()
+        for k, v in store.items():
+            key_file = os.path.join(keys_dir, k)
+            with open(key_file, "w") as f:
+                f.write(f"{v}\n")
+        open(os.path.join(target_dir, "nv-config", "add"), "a").close()
+        open(os.path.join(target_dir, "nv-config", "commit"), "a").close()
+        print(f"[NVRAM] Seeded sysfs tree at {target_dir} with {len(store)} keys.")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Mazda CMU Mock NVRAM Manager")
     parser.add_argument("--get", help="Get value for NVRAM key")
     parser.add_argument("--set", nargs=2, metavar=("KEY", "VAL"), help="Set value for NVRAM key")
     parser.add_argument("--dump", action="store_true", help="Dump all NVRAM key-value pairs")
+    parser.add_argument("--seed-sysfs", metavar="DIR", help="Export NVRAM sysfs directory structure")
     args = parser.parse_args()
 
     nvram = NVRAMShim()
@@ -78,5 +91,7 @@ if __name__ == "__main__":
         print(f"Set NVRAM {args.set[0]} = {args.set[1]}")
     elif args.dump:
         print(json.dumps(nvram.dump(), indent=2))
+    elif args.seed_sysfs:
+        nvram.seed_sysfs(args.seed_sysfs)
     else:
         parser.print_help()

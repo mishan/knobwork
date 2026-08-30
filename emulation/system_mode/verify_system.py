@@ -16,24 +16,33 @@ SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 DEFAULT_KERNEL = SCRIPT_DIR / "cache/vmlinuz-armmp"
 DEFAULT_INITRAMFS = SCRIPT_DIR / "build/initramfs.cpio.gz"
 REQUIRED_MARKERS = (
+    "CMU_NETWORK_READY",
     "CMU_DBUS_READY",
     "CMU_SERVICE_DBUS_READY",
     "CMU_HMI_DBUS_READY",
+    "CMU_SM_READY",
+    "CMU_APPSDK_READY",
+    "CMU_DBAPI_READY",
+    "CMU_MMUI_READY",
     "CMU_EMULATOR_READY",
 )
 
+HOST_FORWARD_PORTS = (12700, 12766, 12800)
 
-def is_qemu_already_running() -> bool:
+
+def occupied_host_forward_ports() -> list[int]:
     import socket
-    for port in (12700, 2700):
+
+    occupied = []
+    for port in HOST_FORWARD_PORTS:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(0.5)
                 if s.connect_ex(("127.0.0.1", port)) == 0:
-                    return True
+                    occupied.append(port)
         except Exception:
             pass
-    return False
+    return occupied
 
 
 def verify(kernel: pathlib.Path, initramfs: pathlib.Path, timeout: float) -> int:
@@ -42,10 +51,20 @@ def verify(kernel: pathlib.Path, initramfs: pathlib.Path, timeout: float) -> int
             print(f"[VERIFY-SYSTEM] Missing {label}: {path}", file=sys.stderr)
             return 2
 
-    if is_qemu_already_running():
-        print("[VERIFY-SYSTEM] Detected an active QEMU system mode instance running on 127.0.0.1.")
-        print("[VERIFY-SYSTEM] PASS: stock BusyBox and D-Bus are live under active qemu-system-arm.")
-        return 0
+    occupied_ports = occupied_host_forward_ports()
+    if occupied_ports:
+        print(
+            "[VERIFY-SYSTEM] Cannot run an owned boot verification because QEMU "
+            "host-forward port(s) are occupied: "
+            + ", ".join(str(port) for port in occupied_ports),
+            file=sys.stderr,
+        )
+        print(
+            "[VERIFY-SYSTEM] Stop the existing guest before verification. "
+            "An unrelated listener must never count as a passing guest.",
+            file=sys.stderr,
+        )
+        return 2
 
     environment = os.environ.copy()
     environment["QEMU_KERNEL"] = str(kernel)
@@ -57,8 +76,7 @@ def verify(kernel: pathlib.Path, initramfs: pathlib.Path, timeout: float) -> int
         stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
+        bufsize=0,
         env=environment,
     )
     assert process.stdout is not None
@@ -70,10 +88,10 @@ def verify(kernel: pathlib.Path, initramfs: pathlib.Path, timeout: float) -> int
     try:
         while time.monotonic() < deadline:
             for key, _ in selector.select(timeout=0.2):
-                line = key.fileobj.readline()
-                if not line:
+                chunk = os.read(key.fileobj.fileno(), 64 * 1024)
+                if not chunk:
                     break
-                output.append(line)
+                output.append(chunk.decode("utf-8", errors="replace"))
                 if all(marker in "".join(output) for marker in REQUIRED_MARKERS):
                     break
             combined = "".join(output)
@@ -107,7 +125,10 @@ def verify(kernel: pathlib.Path, initramfs: pathlib.Path, timeout: float) -> int
             print(combined, file=sys.stderr)
         return 1
 
-    print("[VERIFY-SYSTEM] PASS: stock BusyBox and D-Bus are live under qemu-system-arm")
+    print(
+        "[VERIFY-SYSTEM] PASS: owned qemu-system-arm boot reached all D-Bus "
+        "and native MMUI/AppSDK/DBAPI readiness markers"
+    )
     return 0
 
 

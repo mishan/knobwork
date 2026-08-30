@@ -55,6 +55,7 @@ function resolveChromePath() {
 const TARGET_URL = process.env.EMU_URL || "http://127.0.0.1:8080/";
 const CHROME = resolveChromePath();
 const SCREENSHOT = process.env.EMU_SCREENSHOT || "";
+const EXPECTED_MODE = process.env.EMU_EXPECT_MODE || "mock";
 const WIDTH = 800;
 const HEIGHT = 480;
 
@@ -67,6 +68,10 @@ function getJson(url) {
             response.setEncoding("utf8");
             response.on("data", (chunk) => { body += chunk; });
             response.on("end", () => {
+                if (response.statusCode < 200 || response.statusCode >= 300) {
+                    reject(new Error("HTTP " + response.statusCode + " from " + url));
+                    return;
+                }
                 try {
                     resolve(JSON.parse(body));
                 } catch (error) {
@@ -75,6 +80,38 @@ function getJson(url) {
             });
         }).on("error", reject);
     });
+}
+
+function assertHealthMode(health) {
+    if (health.mode !== EXPECTED_MODE) {
+        throw new Error(
+            "expected harness mode " + EXPECTED_MODE + ", got " + health.mode
+        );
+    }
+    if (EXPECTED_MODE === "proxy" && !health.proxy) {
+        throw new Error("proxy health details are missing");
+    }
+}
+
+async function waitForNativeProxy() {
+    const healthUrl = new URL("/__emu/health", TARGET_URL);
+    const deadline = Date.now() + 10000;
+    let health;
+    while (Date.now() < deadline) {
+        health = await getJson(healthUrl);
+        assertHealthMode(health);
+        if (health.nativeProxyReady) {
+            const backends = Object.values(health.proxy.backends);
+            if (backends.every((backend) => backend.activeConnections > 0)
+                    && health.proxy.mockFallbackMessages === 0) {
+                return health;
+            }
+        }
+        await delay(100);
+    }
+    throw new Error(
+        "native proxy did not connect all backends: " + JSON.stringify(health)
+    );
 }
 
 class CdpClient {
@@ -155,7 +192,7 @@ function launchChrome(profileDirectory) {
         "--no-first-run",
         "--remote-debugging-port=0",
         "--user-data-dir=" + profileDirectory,
-        TARGET_URL
+        "about:blank"
     ], { stdio: ["ignore", "ignore", "pipe"] });
 
     return new Promise((resolve, reject) => {
@@ -190,11 +227,11 @@ async function findPageTarget(browserWebSocketUrl) {
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {
         const targets = await getJson(listUrl);
-        const page = targets.find((target) => target.type === "page" && target.url === TARGET_URL);
+        const page = targets.find((target) => target.type === "page");
         if (page) return page;
         await delay(100);
     }
-    throw new Error("Chrome did not create a page for " + TARGET_URL);
+    throw new Error("Chrome did not create a page target");
 }
 
 async function evaluate(client, expression) {
@@ -250,13 +287,30 @@ function pngDimensions(buffer) {
     return { width: buffer.readUInt32BE(16), height: buffer.readUInt32BE(20) };
 }
 
+async function stopChrome(chrome) {
+    if (!chrome || chrome.exitCode !== null) {
+        return;
+    }
+    const exited = new Promise((resolve) => chrome.once("exit", resolve));
+    chrome.kill("SIGTERM");
+    await Promise.race([exited, delay(2000)]);
+    if (chrome.exitCode === null) {
+        chrome.kill("SIGKILL");
+        await Promise.race([exited, delay(2000)]);
+    }
+}
+
 async function main() {
     const profileDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "mazda-ui-verify-"));
     let chrome;
     let client;
 
     try {
-        await getJson(new URL("/__emu/health", TARGET_URL));
+        if (!["mock", "proxy"].includes(EXPECTED_MODE)) {
+            throw new Error("EMU_EXPECT_MODE must be mock or proxy");
+        }
+        const startupHealth = await getJson(new URL("/__emu/health", TARGET_URL));
+        assertHealthMode(startupHealth);
         const launched = await launchChrome(profileDirectory);
         chrome = launched.child;
         const page = await findPageTarget(launched.browserWebSocketUrl);
@@ -277,14 +331,27 @@ async function main() {
         ]);
 
         const loaded = client.waitFor("Page.loadEventFired");
-        await client.send("Page.reload", { ignoreCache: true });
+        await client.send("Page.navigate", { url: TARGET_URL });
         await loaded;
-        await waitForExpression(
-            client,
-            'document.querySelector(".MainMenuCtrlIconName") && document.querySelector(".MainMenuCtrlIconName").innerText === "Communication"',
-            "the stock HomeScreen",
-            15000
-        );
+        let proxyHealth = EXPECTED_MODE === "proxy"
+            ? await waitForNativeProxy()
+            : null;
+        if (EXPECTED_MODE === "proxy") {
+            await waitForExpression(
+                client,
+                '["IntroAnimation", "HomeScreen"].includes(framework.getCurrCtxtId())',
+                "a native MMUI startup context",
+                30000
+            );
+            proxyHealth = await getJson(new URL("/__emu/health", TARGET_URL));
+        } else {
+            await waitForExpression(
+                client,
+                'document.querySelector(".MainMenuCtrlIconName") && document.querySelector(".MainMenuCtrlIconName").innerText === "Communication"',
+                "the stock HomeScreen",
+                15000
+            );
+        }
 
         const initialState = await evaluate(client, "({" +
             "viewport:{width:innerWidth,height:innerHeight}," +
@@ -296,6 +363,97 @@ async function main() {
             "appsdk:framework.websockets._appWs.readyState," +
             "dbapi:framework.websockets._dbapiWs.readyState}," +
             "compatibility:window.__mazdaEmulator})");
+
+        if (initialState.compatibility.backendMode !== EXPECTED_MODE) {
+            throw new Error(
+                "browser compatibility mode was "
+                + initialState.compatibility.backendMode
+                + ", expected " + EXPECTED_MODE
+            );
+        }
+        if (EXPECTED_MODE === "proxy" && initialState.compatibility.syntheticBackend) {
+            throw new Error("proxy verification loaded synthetic backend behavior");
+        }
+
+        if (EXPECTED_MODE === "proxy") {
+            const backends = Object.values(proxyHealth.proxy.backends);
+            const mmui = proxyHealth.proxy.backends.guiifm;
+            if (proxyHealth.proxy.mockFallbackMessages !== 0
+                    || mmui.frontendToGuestMessages < 1
+                    || mmui.guestToFrontendMessages < 1
+                    || backends.some((backend) => (
+                        backend.frontendToGuestBinaryMessages !== 0
+                        || backend.guestToFrontendBinaryMessages !== 0
+                    ))) {
+                throw new Error(
+                    "native proxy provenance did not show bidirectional text MMUI traffic: "
+                    + JSON.stringify(proxyHealth)
+                );
+            }
+
+            const capture = await client.send("Page.captureScreenshot", {
+                format: "png",
+                captureBeyondViewport: false
+            });
+            const screenshot = Buffer.from(capture.data, "base64");
+            const dimensions = pngDimensions(screenshot);
+            if (dimensions.width !== WIDTH || dimensions.height !== HEIGHT) {
+                throw new Error(
+                    "unexpected screenshot size " + dimensions.width + "x" + dimensions.height
+                );
+            }
+            if (SCREENSHOT) {
+                fs.mkdirSync(path.dirname(path.resolve(SCREENSHOT)), { recursive: true });
+                fs.writeFileSync(SCREENSHOT, screenshot);
+            }
+
+            const errors = client.events.filter((event) => {
+                if (event.method === "Runtime.exceptionThrown") return true;
+                if (event.method === "Log.entryAdded") {
+                    return event.params.entry && event.params.entry.level === "error";
+                }
+                return event.method === "Runtime.consoleAPICalled"
+                    && event.params.type === "error";
+            });
+            const knownNativeStartupErrors = errors.filter((event) => (
+                event.method === "Runtime.consoleAPICalled"
+                && event.params.args
+                && event.params.args.some((arg) => (
+                    typeof arg.value === "string"
+                    && arg.value.includes(
+                        "SYS_SETTINGS app didn't set all required values before timeout"
+                    )
+                    && arg.value.includes("issuing initGui with necessary default values")
+                ))
+            ));
+            const unexpectedErrors = errors.filter(
+                (event) => !knownNativeStartupErrors.includes(event)
+            );
+            if (unexpectedErrors.length) {
+                throw new Error(
+                    "browser reported " + unexpectedErrors.length
+                    + " unexpected runtime error(s): "
+                    + JSON.stringify(unexpectedErrors.slice(0, 10))
+                );
+            }
+
+            console.log(JSON.stringify({
+                ok: true,
+                scope: "native-startup-transport",
+                target: TARGET_URL,
+                screenshot: SCREENSHOT || null,
+                screenshotDimensions: dimensions,
+                initialState,
+                limitation: initialState.currentContext === "IntroAnimation"
+                    ? "native splashplayer/nativeguictrl completion is not emulated"
+                    : null,
+                knownNativeStartupErrors: knownNativeStartupErrors.map(
+                    (event) => event.params.args.map((arg) => arg.value).filter(Boolean)
+                ),
+                backendProvenance: proxyHealth
+            }, null, 2));
+            return;
+        }
 
         await pressKey(client, "n", "KeyN", 78, "n");
         await delay(350);
@@ -360,12 +518,18 @@ async function main() {
             screenshot: SCREENSHOT || null,
             screenshotDimensions: dimensions,
             initialState,
-            finalState
+            finalState,
+            backendProvenance: proxyHealth
         }, null, 2));
     } finally {
         if (client) client.close();
-        if (chrome && chrome.exitCode === null) chrome.kill("SIGTERM");
-        fs.rmSync(profileDirectory, { recursive: true, force: true });
+        await stopChrome(chrome);
+        fs.rmSync(profileDirectory, {
+            recursive: true,
+            force: true,
+            maxRetries: 5,
+            retryDelay: 100
+        });
     }
 }
 

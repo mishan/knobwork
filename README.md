@@ -53,8 +53,9 @@ python3 emulate.py ui
 python3 emulate.py verify-ui --screenshot /tmp/mazda-ui.png
 ```
 
-The ARM system guest uses a checksum-pinned generic kernel and a generated,
-non-mutating initramfs:
+The ARM system guest uses a checksum-pinned generic kernel, its matching Debian
+installer initrd as the source of QEMU network modules, and a generated,
+non-mutating Mazda initramfs:
 
 ```sh
 python3 emulate.py fetch-kernel
@@ -62,6 +63,23 @@ python3 emulate.py build-guest
 python3 emulate.py verify-system
 ```
 
-The current full-system regression boots stock Mazda BusyBox and the stock
-Mazda D-Bus daemon. It does not yet claim that the complete CMU service graph
-or native renderer is running.
+The full-system regression owns the QEMU process and requires readiness from
+all three stock D-Bus daemons, Service Manager, MMUI, AppSDK, and DBAPI. It
+fails if QEMU's host-forward ports are already occupied rather than treating
+an unrelated listener as a passing guest.
+
+For native browser-to-guest verification, leave the system guest running and
+use two additional terminals:
+
+```sh
+python3 emulate.py ui --proxy
+python3 emulate.py verify-ui --expect-mode proxy
+```
+
+Proxy verification is fail-closed: it never substitutes mock MMUI responses
+when a native guest connection is unavailable. It proves bidirectional text
+traffic through all three stock services and currently stops at MMUI's real
+`system.IntroAnimation` context. The deterministic mock regression remains the
+full Home/menu/navigation test. Native Home requires the missing
+`splashplayer`/`nativeguictrl` lifecycle, and optional menu icons remain absent
+until their native services publish availability.

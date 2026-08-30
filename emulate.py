@@ -27,6 +27,7 @@ def resolve_default_rootfs() -> str:
 DEFAULT_ROOTFS = resolve_default_rootfs()
 SYSTEM_MODE_DIR = os.path.join(BASE_DIR, "emulation/system_mode")
 DEFAULT_KERNEL = os.path.join(SYSTEM_MODE_DIR, "cache/vmlinuz-armmp")
+DEFAULT_INSTALLER_INITRD = os.path.join(SYSTEM_MODE_DIR, "cache/debian-installer-initrd.gz")
 DEFAULT_INITRAMFS = os.path.join(SYSTEM_MODE_DIR, "build/initramfs.cpio.gz")
 DEFAULT_GUEST_OUTPUT = os.path.join(SYSTEM_MODE_DIR, "build")
 
@@ -51,20 +52,32 @@ def cmd_ui(args):
 
 def cmd_fetch_kernel(args):
     fetch_script = os.path.join(SYSTEM_MODE_DIR, "fetch_kernel.py")
-    cmd = [sys.executable, fetch_script, "--output", args.output]
+    cmd = [
+        sys.executable,
+        fetch_script,
+        "--output", args.output,
+        "--initrd-output", args.initrd_output,
+    ]
     return subprocess.run(cmd).returncode
 
 def cmd_verify_ui(args):
     verifier = os.path.join(BASE_DIR, "emulation/harness/verify_ui.js")
     env = os.environ.copy()
     env["EMU_URL"] = args.url
+    env["EMU_EXPECT_MODE"] = args.expect_mode
     if args.screenshot:
         env["EMU_SCREENSHOT"] = args.screenshot
     return subprocess.run(["node", verifier], env=env).returncode
 
 def cmd_build_guest(args):
     build_script = os.path.join(BASE_DIR, "emulation/system_mode/build_guest_root.py")
-    cmd = [sys.executable, build_script, "--root", args.root, "--output", args.output]
+    cmd = [
+        sys.executable,
+        build_script,
+        "--root", args.root,
+        "--output", args.output,
+        "--installer-initrd", args.installer_initrd,
+    ]
     return subprocess.run(cmd).returncode
 
 def cmd_system(args):
@@ -109,6 +122,7 @@ def cmd_status(args):
     print(f"- Base Directory: {BASE_DIR}")
     print(f"- Stock v74 Rootfs Exists: {os.path.exists(DEFAULT_ROOTFS)}")
     print(f"- Generic ARM Kernel Cached: {os.path.exists(DEFAULT_KERNEL)}")
+    print(f"- Matching ARM Modules Cached: {os.path.exists(DEFAULT_INSTALLER_INITRD)}")
     print(f"- Minimal Guest Initramfs Built: {os.path.exists(DEFAULT_INITRAMFS)}")
 
     # Check qemu-arm & qemu-system-arm
@@ -138,18 +152,34 @@ def main():
     # verify-ui
     p_verify = subparsers.add_parser("verify-ui", help="Run the headless 800x480 HMI regression")
     p_verify.add_argument("--url", default="http://127.0.0.1:8080/", help="Running harness URL")
+    p_verify.add_argument(
+        "--expect-mode",
+        choices=("mock", "proxy"),
+        default="mock",
+        help="Require an explicit mock or native QEMU proxy backend",
+    )
     p_verify.add_argument("--screenshot", help="Optional PNG output path")
     p_verify.set_defaults(func=cmd_verify_ui)
 
     # fetch-kernel
     p_fk = subparsers.add_parser("fetch-kernel", help="Fetch and verify the tested generic ARM kernel")
     p_fk.add_argument("--output", default=DEFAULT_KERNEL, help="Kernel output path")
+    p_fk.add_argument(
+        "--initrd-output",
+        default=DEFAULT_INSTALLER_INITRD,
+        help="Matching Debian installer initrd output path",
+    )
     p_fk.set_defaults(func=cmd_fetch_kernel)
 
     # build-guest
     p_bg = subparsers.add_parser("build-guest", help="Build the non-mutating minimal ARM initramfs")
     p_bg.add_argument("--root", default=DEFAULT_ROOTFS, help="Rootfs path")
     p_bg.add_argument("--output", default=DEFAULT_GUEST_OUTPUT, help="Build output directory")
+    p_bg.add_argument(
+        "--installer-initrd",
+        default=DEFAULT_INSTALLER_INITRD,
+        help="Matching Debian installer initrd containing kernel modules",
+    )
     p_bg.set_defaults(func=cmd_build_guest)
 
     # system
