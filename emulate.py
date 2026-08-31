@@ -10,12 +10,24 @@ import sys
 import subprocess
 import argparse
 import shutil
+import json
 
 from emulation.firmware_input import (
     FirmwareInputError,
     discover_default_rootfs,
     resolve_rootfs,
     unpack_firmware,
+)
+from emulation.overlay_mode import (
+    DEFAULT_BUNDLE as DEFAULT_OVERLAY_BUNDLE,
+    DEFAULT_WORKSPACE as DEFAULT_OVERLAY_WORKSPACE,
+    MANAGER_ACTIONS as OVERLAY_MANAGER_ACTIONS,
+    OverlayWorkflowError,
+    format_status as format_overlay_status,
+    initialize_workspace as initialize_overlay_workspace,
+    reset_workspace as reset_overlay_workspace,
+    run_manager_action as run_overlay_manager_action,
+    workspace_status as overlay_workspace_status,
 )
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -127,6 +139,48 @@ def cmd_inject(args):
     injector_script = os.path.join(BASE_DIR, "emulation/shims/vip_can_injector.py")
     cmd = [sys.executable, injector_script, "--scenario", args.scenario, "--url", args.url]
     return subprocess.run(cmd).returncode
+
+
+def cmd_overlay(args):
+    workspace = os.path.abspath(os.path.expanduser(args.workspace))
+    if args.action == "init":
+        rootfs = selected_rootfs(args)
+        initialized = initialize_overlay_workspace(
+            workspace,
+            rootfs,
+            os.path.abspath(os.path.expanduser(args.bundle)),
+        )
+        print(f"[OVERLAY] Initialized disposable workspace: {initialized.path}")
+        print(f"[OVERLAY] Source firmware remains unchanged: {rootfs}")
+        print(f"[OVERLAY] Working root for UI/system tools: {initialized.root}")
+        return 0
+    if args.root or args.firmware or args.firmware_work_dir:
+        raise OverlayWorkflowError("Firmware input arguments apply only to overlay init")
+    if args.action == "status":
+        status = overlay_workspace_status(workspace)
+        if args.json:
+            print(json.dumps(status, indent=2, sort_keys=True))
+        else:
+            print(format_overlay_status(status))
+        return 0
+    if args.action == "reset":
+        reset_overlay_workspace(workspace)
+        print(f"[OVERLAY] Removed disposable workspace: {workspace}")
+        return 0
+    result = run_overlay_manager_action(
+        workspace,
+        args.action,
+        shell=args.shell,
+        runtime=args.runtime,
+        fail_point=args.fail_point,
+        crash_point=args.crash_point,
+    )
+    if result.returncode == 99:
+        print(
+            "[OVERLAY] Simulated abrupt process loss. The workspace was intentionally left for recovery.",
+            file=sys.stderr,
+        )
+    return result.returncode
 
 
 def cmd_unpack(args):
@@ -244,6 +298,46 @@ def main():
     p_inj.add_argument("--url", default="ws://127.0.0.1:2700", help="WebSocket URL")
     p_inj.set_defaults(func=cmd_inject)
 
+    # reversible overlay manager
+    p_overlay = subparsers.add_parser(
+        "overlay",
+        help="Exercise the reversible overlay manager in a disposable firmware workspace",
+    )
+    p_overlay.add_argument(
+        "action",
+        choices=("init", "status", "reset", *sorted(OVERLAY_MANAGER_ACTIONS)),
+        help="Workspace or overlay-manager action",
+    )
+    p_overlay.add_argument(
+        "--workspace",
+        default=str(DEFAULT_OVERLAY_WORKSPACE),
+        help="Persistent disposable workspace",
+    )
+    p_overlay.add_argument(
+        "--bundle",
+        default=str(DEFAULT_OVERLAY_BUNDLE),
+        help="Overlay USB bundle snapshotted by init",
+    )
+    add_firmware_input_arguments(p_overlay)
+    p_overlay.add_argument(
+        "--shell",
+        choices=("stock", "host"),
+        default="stock",
+        help="Run through qemu-arm plus stock BusyBox ash, or host sh for harness debugging",
+    )
+    p_overlay.add_argument(
+        "--runtime",
+        action="store_true",
+        help="Run from the persisted /data runtime instead of the emulated USB",
+    )
+    p_overlay.add_argument("--fail-point", help="Inject a handled manager failure")
+    p_overlay.add_argument(
+        "--crash-point",
+        help="Simulate abrupt process loss (for example mutation:2, metadata, or committed)",
+    )
+    p_overlay.add_argument("--json", action="store_true", help="JSON status output")
+    p_overlay.set_defaults(func=cmd_overlay)
+
     # firmware package tools
     p_unpack = subparsers.add_parser("unpack", help="Unpack a user-supplied CMU .up package")
     p_unpack.add_argument("firmware", metavar="FILE.up", help="Firmware update package")
@@ -263,7 +357,7 @@ def main():
     args = parser.parse_args()
     try:
         result = args.func(args)
-    except (FirmwareInputError, subprocess.CalledProcessError) as error:
+    except (FirmwareInputError, OverlayWorkflowError, subprocess.CalledProcessError) as error:
         parser.error(str(error))
     sys.exit(result)
 

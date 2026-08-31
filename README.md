@@ -63,6 +63,22 @@ python3 emulate.py ui --root /path/to/extracted/root
 CMU_ROOTFS=/path/to/extracted/root python3 emulate.py build-guest
 ```
 
+The reversible overlay manager has its own persistent, disposable emulator
+workspace. It verifies and copies the stock root, snapshots the USB bundle, and
+runs the real manager with emulated `/data`, mount, watchdog, and NVRAM state:
+
+```sh
+python3 emulate.py overlay init --root /path/to/extracted/root
+python3 emulate.py overlay install
+python3 emulate.py overlay verify --runtime
+python3 emulate.py overlay status
+```
+
+The source firmware remains untouched. The default action shell is the stock
+ARM BusyBox `ash` under `qemu-arm`. Lifecycle, boot-health, failure injection,
+and interrupted-transaction recovery examples are in the
+[overlay developer workflow](overlay/README.md#developer-emulator-workflow).
+
 The UI server and its regression run as separate commands:
 
 ```sh

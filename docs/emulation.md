@@ -62,6 +62,12 @@ four stages:
   `DisposeIntroVideo`, `Timeout`, and `NotifyDisclaimerEnd` themselves. Strict
   proxy verification requires the ordered `IntroAnimation` -> `Disclaimer` ->
   `HomeScreen` trace and a populated main-menu icon.
+- **Reversible overlay workflow:** `emulate.py overlay` verifies an exact stock
+  root, clones it into an ignored disposable workspace, and runs the real USB
+  transaction manager through `qemu-arm` and stock ARM BusyBox `ash`. The
+  persistent workspace exposes install/repair/disable/restore, boot-health,
+  handled-failure, and abrupt-process-loss recovery paths without touching the
+  source firmware. See [`overlay/README.md`](../overlay/README.md#developer-emulator-workflow).
 
 ## Existing `mazda_emulation` repository
 

@@ -90,12 +90,88 @@ repair/disable/cancel. Explicit actions remain available from an authenticated
 bench shell. Do not deploy it to a vehicle merely because the off-target tests
 pass.
 
+## Developer emulator workflow
+
+`emulate.py overlay` runs the actual USB manager against a persistent,
+disposable copy of the firmware tree. Initialization verifies that the source
+is the exact stock image pinned by the manifest, clones it with reflinks when
+the filesystem supports them, snapshots the current USB bundle, and creates
+emulated `/data`, root-mount, watchdog, and NVRAM state. It never points the
+manager at the source firmware.
+
+Create the default ignored workspace and inspect its initial state:
+
+```sh
+python3 emulate.py overlay init --root /path/to/extracted/root
+python3 emulate.py overlay status
+```
+
+If exactly one firmware package has already been prepared with
+`emulate.py unpack`, `--root` can be omitted. The default workspace is
+`scratch/overlay-workspace`; use `--workspace /another/path` on every command
+to keep multiple experiments.
+
+Run the normal lifecycle through `qemu-arm` and the stock firmware's ARM
+BusyBox `ash`:
+
+```sh
+python3 emulate.py overlay install
+python3 emulate.py overlay verify --runtime
+python3 emulate.py overlay boot-attempt --runtime
+python3 emulate.py overlay status
+python3 emulate.py overlay boot-success --runtime
+python3 emulate.py overlay disable --runtime
+python3 emulate.py overlay verify --runtime
+```
+
+The `--runtime` calls execute the manager copy persisted under the emulated
+`/data`, just as boot hooks must when the USB is absent. Stock-shell mode is
+the default and requires `qemu-arm` plus `root/bin/busybox`; external utilities
+and device behavior remain host-backed test shims. `--shell host` is available
+only for debugging the harness itself.
+
+To rehearse restart recovery, interrupt an install after its second durable
+mutation, inspect the live transaction pointer, then invoke the manager again:
+
+```sh
+python3 emulate.py overlay install --crash-point mutation:2
+python3 emulate.py overlay status
+python3 emulate.py overlay verify
+python3 emulate.py overlay status
+```
+
+The injected command exits with status 99 by design. The following action must
+first roll the incomplete transaction back, restore the emulated mount and
+watchdog state, clear the pointer, and only then perform verification. Other
+supported crash points include `metadata` and `committed`; handled failure
+paths can be selected with `--fail-point`.
+
+The modified working root can be passed directly to other emulator stages:
+
+```sh
+python3 emulate.py ui --root scratch/overlay-workspace/root
+python3 emulate.py build-guest --root scratch/overlay-workspace/root
+```
+
+The current diagnostic overlay has no browser-visible UI, so those commands
+are integration entry points for later overlays rather than a visual demo.
+Status is also available as machine-readable JSON with `--json`. When the
+experiment is finished, remove only the validated disposable workspace:
+
+```sh
+python3 emulate.py overlay reset
+```
+
+Because `init` snapshots both inputs, reset and initialize again after changing
+the bundle or selecting a different firmware root.
+
 ## Verification
 
 The regression suite builds a fresh replica of the v74 paths for every test:
 
 ```sh
 python3 -m unittest discover -s overlay/tests -v
+python3 -m unittest discover -s emulation/tests -v
 ```
 
 It covers the full action lifecycle, firmware and manifest rejection, partial
@@ -104,4 +180,6 @@ restoration, the installed boot bridge, third-attempt safe mode, fail-open
 runtime corruption, transactional NVRAM, simulated process loss during file,
 NVRAM, metadata, commit, and rollback boundaries, corrupted recovery records,
 incomplete backup pairs, the no-argument dialog path, and JavaScript preflight
-before remount.
+before remount. The emulator-workflow suite additionally exercises the public
+CLI, source-tree preservation, persisted-runtime execution, guarded cleanup,
+and restart recovery after an injected process loss.

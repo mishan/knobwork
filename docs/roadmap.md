@@ -15,8 +15,10 @@
 **Status:** implemented off-target with a hash-pinned diagnostic overlay,
 transaction/fault regressions, and a fail-open Service Manager boot-health
 bridge. Interrupted transactions are restart-recoverable from durable rollback
-records. Bench-CMU validation and a browser-level success signal remain
-required before a framework overlay is added. See
+records. A disposable emulator workflow now runs the real manager through the
+stock ARM BusyBox shell and exposes lifecycle and interrupted-transaction
+drills. Bench-CMU validation and a browser-level success signal remain required
+before a framework overlay is added. See
 [`overlay/README.md`](../overlay/README.md).
 
 Adapt the v74 USB filename launcher pattern into a general overlay installer.
