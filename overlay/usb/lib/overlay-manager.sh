@@ -460,16 +460,25 @@ overlay_backup_status() {
     overlay_target=$1
     overlay_stock=$2
     overlay_backup="$OVERLAY_BACKUP_DIR$overlay_target"
-    [ ! -L "$overlay_backup" ] && [ ! -L "$overlay_backup.absent" ] || return 1
+    overlay_backup_mode="$overlay_backup.mode"
+    [ ! -L "$overlay_backup" ] && [ ! -L "$overlay_backup.absent" ] &&
+        [ ! -L "$overlay_backup_mode" ] || return 1
     if [ "$overlay_stock" = absent ]; then
-        [ ! -e "$overlay_backup" ] || return 1
+        [ ! -e "$overlay_backup" ] && [ ! -e "$overlay_backup_mode" ] || return 1
         if [ -e "$overlay_backup.absent" ]; then printf 'valid\n'; else printf 'missing\n'; fi
     else
         [ ! -e "$overlay_backup.absent" ] || return 1
         if [ -f "$overlay_backup" ]; then
             [ "$(overlay_sha256 "$overlay_backup")" = "$overlay_stock" ] || return 1
+            [ -f "$overlay_backup_mode" ] || return 1
+            overlay_saved_mode=$(cat "$overlay_backup_mode") || return 1
+            case "$overlay_saved_mode" in
+                [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) ;;
+                *) return 1 ;;
+            esac
             printf 'valid\n'
         else
+            [ ! -e "$overlay_backup_mode" ] || return 1
             printf 'missing\n'
         fi
     fi
@@ -580,6 +589,7 @@ overlay_create_backup() {
     overlay_backup="$OVERLAY_BACKUP_DIR$overlay_target"
     overlay_backup_state=$(overlay_backup_status "$overlay_target" "$overlay_stock") || return 1
     [ "$overlay_backup_state" = valid ] && return 0
+    overlay_original_mode=absent
     mkdir -p "$(dirname "$overlay_backup")" || return 1
     if [ "$overlay_stock" = absent ]; then
         : > "$overlay_backup.absent" || return 1
@@ -587,12 +597,22 @@ overlay_create_backup() {
     else
         [ "$(overlay_hash_or_absent "$overlay_live")" = "$overlay_stock" ] || return 1
         overlay_backup_stage="$overlay_backup.$$.stage"
+        overlay_backup_mode="$overlay_backup.mode"
+        overlay_backup_mode_stage="$overlay_backup_mode.$$.stage"
+        overlay_original_mode=$(stat -c '%a' "$overlay_live" 2>/dev/null) || return 1
+        case "$overlay_original_mode" in
+            [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) ;;
+            *) return 1 ;;
+        esac
         cp -p "$overlay_live" "$overlay_backup_stage" || return 1
         [ "$(overlay_sha256 "$overlay_backup_stage")" = "$overlay_stock" ] || return 1
         chmod a-w "$overlay_backup_stage" || return 1
+        printf '%s\n' "$overlay_original_mode" > "$overlay_backup_mode_stage" || return 1
+        chmod 0444 "$overlay_backup_mode_stage" || return 1
         mv "$overlay_backup_stage" "$overlay_backup" || return 1
+        mv "$overlay_backup_mode_stage" "$overlay_backup_mode" || return 1
     fi
-    overlay_journal INFO "backup=created target=$overlay_target stock=$overlay_stock" || return 1
+    overlay_journal INFO "backup=created target=$overlay_target stock=$overlay_stock mode=$overlay_original_mode" || return 1
 }
 
 overlay_create_nvram_backup() {
@@ -689,7 +709,13 @@ overlay_restore_target() {
     else
         overlay_backup="$OVERLAY_BACKUP_DIR$overlay_target"
         [ "$(overlay_sha256 "$overlay_backup")" = "$overlay_stock" ] || return 1
-        overlay_replace_with_file "$overlay_target" "$overlay_backup" "$overlay_stock" preserve data
+        overlay_backup_mode="$overlay_backup.mode"
+        overlay_stock_mode=$(cat "$overlay_backup_mode") || return 1
+        case "$overlay_stock_mode" in
+            [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) ;;
+            *) return 1 ;;
+        esac
+        overlay_replace_with_file "$overlay_target" "$overlay_backup" "$overlay_stock" "$overlay_stock_mode" data
     fi
 }
 
@@ -819,6 +845,12 @@ overlay_verify_targets() {
         [ "$(overlay_hash_or_absent "$overlay_live")" = "$overlay_expected" ] || return 1
         if [ "$overlay_wanted" = enabled ]; then
             [ "$(stat -c '%a' "$overlay_live" 2>/dev/null)" = "${overlay_mode#0}" ] || return 1
+        elif [ "$overlay_stock" != absent ]; then
+            overlay_backup_mode="$OVERLAY_BACKUP_DIR$overlay_target.mode"
+            if [ -f "$overlay_backup_mode" ]; then
+                overlay_stock_mode=$(cat "$overlay_backup_mode") || return 1
+                [ "$(stat -c '%a' "$overlay_live" 2>/dev/null)" = "$overlay_stock_mode" ] || return 1
+            fi
         fi
     done < "$OVERLAY_ENTRIES"
     while IFS='|' read -r overlay_key overlay_stock_hash overlay_stock_value overlay_payload_hash overlay_payload_value; do

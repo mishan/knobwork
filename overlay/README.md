@@ -1,9 +1,9 @@
 # Reversible overlay manager
 
 This is the phase-2 USB transaction manager from
-[`docs/roadmap.md`](../docs/roadmap.md). The first pinned bundle installs only
-two inert diagnostic files under `/jci/scripts`; it does not patch the HMI,
-service manager, boot configuration, NVRAM, or native binaries.
+[`docs/roadmap.md`](../docs/roadmap.md). The pinned bundle installs two inert
+diagnostic files and a minimal boot-health bridge under `/jci/scripts`. It does
+not patch the HMI framework, NVRAM, or native binaries.
 
 ## Safety contract
 
@@ -19,6 +19,8 @@ service manager, boot configuration, NVRAM, or native binaries.
   refuses any unrecognized target content.
 - First-install backups and absent-file markers live under
   `/data/cmu-overlay/backups/files` and are never replaced.
+- Existing-file backups retain the original numeric mode in a separate
+  read-only sidecar so restore does not inherit the hardened backup mode.
 - Manifest-declared NVRAM keys use the stock `add`/`keys`/`commit` sequence,
   immutable first-value backups under `/data/cmu-overlay/backups/nvram`, exact
   readback verification, and the same reverse-order rollback as files.
@@ -31,14 +33,24 @@ service manager, boot configuration, NVRAM, or native binaries.
 
 The accepted actions are `install`, `verify`, `repair`, `disable`, and
 `restore`. `boot-attempt` increments the persistent counter and restores all
-stock targets in safe mode on the third unacknowledged attempt. A healthy HMI
-startup calls `boot-success`. Install and repair preserve a read-only runtime
-copy under `/data/cmu-overlay/runtime/<manifest-sha256>` so those actions remain
-available after the USB is removed. Runtime actions mirror the persistent
-journal to `/data/cmu-overlay/runtime-journal.log` because no USB is assumed to
-be present. The diagnostic overlay deliberately does not add a boot hook; a
-later HMI overlay must add both calls as reviewed, hash-pinned targets so the
-counter measures the actual modified startup path.
+stock targets in safe mode on the third unacknowledged attempt. Install and
+repair preserve a read-only runtime copy under
+`/data/cmu-overlay/runtime/<manifest-sha256>` so boot actions remain available
+after the USB is removed. Runtime actions mirror the persistent journal to
+`/data/cmu-overlay/runtime-journal.log` because no USB is assumed to be present.
+
+The boot bridge replaces the otherwise empty, exactly hash-pinned stock
+`stage_1.sh` and `stage_3.sh` scripts. `stage_1.sh` records an attempt at the
+earliest Service Manager dependency gate. `stage_3.sh`, which is released only
+after `jciMMUI` starts, records success and resets the counter. Both scripts and
+their helper are fail-open: bookkeeping damage is logged but always returns
+success so it cannot block the stock service graph. Disable, restore, and safe
+mode put the exact stock stage scripts back and remove the helper.
+
+This is a native-service readiness signal, not proof that Opera or HomeScreen
+JavaScript initialized successfully. A future HMI framework overlay must move
+the success acknowledgement to a reviewed browser/UI readiness point before it
+can rely on this counter for JavaScript bootloop recovery.
 
 JavaScript entries use the manifest type `js`. They are rejected unless a
 working syntax checker is available through `MZD_OVERLAY_JS_CHECKER`, `node`,
@@ -77,5 +89,6 @@ python3 -m unittest discover -s overlay/tests -v
 
 It covers the full action lifecycle, firmware and manifest rejection, partial
 and unexpected state, rollback at multiple failure points, safety-state
-restoration, persistent-runtime boot-attempt safe mode, transactional NVRAM,
-the no-argument dialog path, and JavaScript preflight before remount.
+restoration, the installed boot bridge, third-attempt safe mode, fail-open
+runtime corruption, transactional NVRAM, the no-argument dialog path, and
+JavaScript preflight before remount.

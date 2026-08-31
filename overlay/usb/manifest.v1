@@ -1,9 +1,12 @@
 manifest_version|1
-overlay_id|diagnostic-v1
+overlay_id|diagnostic-boot-v2
 firmware_file|/jci/version.ini
 firmware_sha256|510229e20edcd61412280250bf00794851de968c5919272a594d299b3adb819b
 firmware_version|MAZ_CMU-150_74.00.324
 firmware_patch|A
 boot_limit|3
+file|/jci/scripts/stage_1.sh|2ec71fc955d0107a6e90d1ab4e6f00c9438b56d3e621ef018d57c8ef07bfae7f|payloads/boot/stage_1.sh|898ec64aa2fa175772c50d9b845849b512f33f5fd5a44dc1976decef4839d7a7|0755|sh
+file|/jci/scripts/stage_3.sh|a8076d3d28d21e02012b20eaf7dbf75409a6277134439025f282e368e3305abf|payloads/boot/stage_3.sh|b1f56369dfd58820f4e6f62909b1cffa92ad9abdad59ed3db39d76cae5674b51|0755|sh
+file|/jci/scripts/cmu-overlay-boot-hook.sh|absent|payloads/boot/cmu-overlay-boot-hook.sh|30310b14c3f673350fd5333a04259d020382892ba1818b7df3d77aa83bef130a|0755|sh
 file|/jci/scripts/cmu-overlay-diagnostic.sh|absent|payloads/diagnostic/cmu-overlay-diagnostic.sh|2ef9eb1303b949f1c33ab3928076599ec173040b7e132307682c160a8b6653f7|0755|sh
 file|/jci/scripts/cmu-overlay-diagnostic.conf|absent|payloads/diagnostic/cmu-overlay-diagnostic.conf|72a381200950a3fb23f32c43d48f1305152b3c64ace9515f8fc5174152a01979|0644|data

@@ -22,6 +22,8 @@ JCI_SW_FLAVOR="cmu150_NA"
 JCI_SW_VER_PATCH="A"
 JCI_BUILD_START_TIME="Tue Aug 30 07:10:46 2022 GMT"
 """
+STOCK_STAGE_1 = "#!/bin/sh\n\n"
+STOCK_STAGE_3 = "#!/bin/sh\n"
 
 
 def sha256(path: Path) -> str:
@@ -45,6 +47,9 @@ class OverlayReplica:
         self.guard = self.base / "guard"
         shutil.copytree(SOURCE_USB, self.usb)
         (self.root / "jci/scripts").mkdir(parents=True)
+        for path, content in zip(self.stage_targets, (STOCK_STAGE_1, STOCK_STAGE_3)):
+            path.write_text(content, encoding="ascii")
+            path.chmod(0o775)
         self.watchdog.parent.mkdir(parents=True)
         self.watchdog.write_text("0\n", encoding="ascii")
         self.mount_state.write_text("ro\n", encoding="ascii")
@@ -116,6 +121,26 @@ class OverlayReplica:
             check=False,
         )
 
+    def run_boot_hook(self, action: str) -> subprocess.CompletedProcess[str]:
+        env = os.environ.copy()
+        env.update(
+            {
+                "MZD_OVERLAY_TEST_MODE": "1",
+                "MZD_OVERLAY_ROOT_PREFIX": str(self.root),
+                "MZD_OVERLAY_DATA_DIR": str(self.data),
+                "MZD_OVERLAY_MOUNT_STATE_FILE": str(self.mount_state),
+                "MZD_OVERLAY_GUARD_DIR": str(self.guard),
+            }
+        )
+        return subprocess.run(
+            ["sh", str(self.boot_hook), action],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=env,
+            check=False,
+        )
+
     def add_nvram_entry(self, key: str, stock: str, payload: str) -> Path:
         nvram_dir = self.root / "sys/class/nvram/nv-config"
         (nvram_dir / "keys").mkdir(parents=True, exist_ok=True)
@@ -141,6 +166,23 @@ class OverlayReplica:
             scripts / "cmu-overlay-diagnostic.conf",
         )
 
+    @property
+    def stage_targets(self) -> tuple[Path, Path]:
+        scripts = self.root / "jci/scripts"
+        return scripts / "stage_1.sh", scripts / "stage_3.sh"
+
+    @property
+    def boot_hook(self) -> Path:
+        return self.root / "jci/scripts/cmu-overlay-boot-hook.sh"
+
+    def assert_stock_boot_files(self, case: unittest.TestCase) -> None:
+        stage_1, stage_3 = self.stage_targets
+        case.assertEqual(stage_1.read_text(encoding="ascii"), STOCK_STAGE_1)
+        case.assertEqual(stage_3.read_text(encoding="ascii"), STOCK_STAGE_3)
+        case.assertEqual(stage_1.stat().st_mode & 0o777, 0o775)
+        case.assertEqual(stage_3.stat().st_mode & 0o777, 0o775)
+        case.assertFalse(self.boot_hook.exists())
+
     def assert_safe(self, case: unittest.TestCase) -> None:
         case.assertEqual(self.mount_state.read_text(encoding="ascii"), "ro\n")
         case.assertEqual(self.watchdog.read_text(encoding="ascii"), "0\n")
@@ -160,7 +202,17 @@ class OverlayManagerTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_install_verify_disable_repair_and_restore(self) -> None:
+        self.assert_ok(self.replica.run("verify"))
         self.assert_ok(self.replica.run("install"))
+        self.assertIn("boot-hook.sh attempt", self.replica.stage_targets[0].read_text())
+        self.assertIn("boot-hook.sh success", self.replica.stage_targets[1].read_text())
+        self.assertTrue(self.replica.boot_hook.is_file())
+        for target in self.replica.stage_targets:
+            mode_backup = (
+                self.replica.data / "backups/files" / target.relative_to(self.replica.root)
+            ).with_suffix(target.suffix + ".mode")
+            self.assertEqual(mode_backup.read_text().strip(), "775")
+            self.assertEqual(mode_backup.stat().st_mode & 0o222, 0)
         for target in self.replica.targets:
             self.assertTrue(target.is_file())
             marker = self.replica.data / "backups/files" / target.relative_to(self.replica.root)
@@ -174,6 +226,7 @@ class OverlayManagerTests(unittest.TestCase):
 
         self.assert_ok(self.replica.run("disable"))
         self.assertTrue(all(not target.exists() for target in self.replica.targets))
+        self.replica.assert_stock_boot_files(self)
         self.assertEqual((self.replica.data / "state").read_text().strip(), "factory")
         self.assert_ok(self.replica.run("verify"))
 
@@ -181,6 +234,7 @@ class OverlayManagerTests(unittest.TestCase):
         self.assertTrue(all(target.is_file() for target in self.replica.targets))
         self.assert_ok(self.replica.run("restore"))
         self.assertTrue(all(not target.exists() for target in self.replica.targets))
+        self.replica.assert_stock_boot_files(self)
         self.assertEqual((self.replica.data / "state").read_text().strip(), "restored")
         self.replica.assert_safe(self)
 
@@ -302,6 +356,40 @@ class OverlayManagerTests(unittest.TestCase):
             (self.replica.data / "runtime-journal.log").read_text(),
         )
         self.replica.assert_safe(self)
+
+    def test_installed_boot_hook_acknowledges_or_rolls_back_startup(self) -> None:
+        self.assert_ok(self.replica.run("install"))
+
+        self.assert_ok(self.replica.run_boot_hook("attempt"))
+        self.assertEqual((self.replica.data / "boot-attempts").read_text().strip(), "1")
+        self.assert_ok(self.replica.run_boot_hook("success"))
+        self.assertEqual((self.replica.data / "boot-attempts").read_text().strip(), "0")
+
+        self.assert_ok(self.replica.run_boot_hook("attempt"))
+        self.assert_ok(self.replica.run_boot_hook("attempt"))
+        self.assert_ok(self.replica.run_boot_hook("attempt"))
+        self.assertEqual((self.replica.data / "state").read_text().strip(), "safe-mode")
+        self.assertTrue(all(not target.exists() for target in self.replica.targets))
+        self.replica.assert_stock_boot_files(self)
+        self.assertIn(
+            "action=boot-attempt|result=ok",
+            (self.replica.data / "boot-hook-status").read_text(),
+        )
+        self.replica.assert_safe(self)
+
+    def test_boot_hook_fails_open_when_runtime_pointer_is_invalid(self) -> None:
+        self.assert_ok(self.replica.run("install"))
+        (self.replica.data / "runtime-current").write_text("../invalid\n")
+
+        result = self.replica.run_boot_hook("attempt")
+
+        self.assert_ok(result)
+        self.assertEqual((self.replica.data / "boot-attempts").read_text().strip(), "0")
+        self.assertIn(
+            "action=boot-attempt|result=skipped|reason=runtime-id-length",
+            (self.replica.data / "boot-hook-status").read_text(),
+        )
+        self.assertTrue(all(target.exists() for target in self.replica.targets))
 
     def test_boot_success_resets_counter(self) -> None:
         self.assert_ok(self.replica.run("install"))
