@@ -29,6 +29,7 @@ none of the patch concepts documented here have been installed on a CMU.
 - [Emulation architecture](docs/emulation.md)
 - [Emulator handoff review and verified baseline](docs/emulator-review.md)
 - [Modification and recovery roadmap](docs/roadmap.md)
+- [Reversible overlay manager](overlay/README.md)
 - [Evidence, hashes, and sources](docs/evidence.md)
 
 ## Confidence language

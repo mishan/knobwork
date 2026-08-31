@@ -12,6 +12,11 @@
 
 ## Phase 2: reversible overlay manager
 
+**Status:** implemented off-target with a hash-pinned diagnostic overlay and
+transaction/fault regressions. Bench-CMU validation and boot-hook integration
+remain required before a framework overlay is added. See
+[`overlay/README.md`](../overlay/README.md).
+
 Adapt the v74 USB filename launcher pattern into a general overlay installer.
 Required properties:
 

@@ -1,0 +1,9 @@
+manifest_version|1
+overlay_id|diagnostic-v1
+firmware_file|/jci/version.ini
+firmware_sha256|510229e20edcd61412280250bf00794851de968c5919272a594d299b3adb819b
+firmware_version|MAZ_CMU-150_74.00.324
+firmware_patch|A
+boot_limit|3
+file|/jci/scripts/cmu-overlay-diagnostic.sh|absent|payloads/diagnostic/cmu-overlay-diagnostic.sh|2ef9eb1303b949f1c33ab3928076599ec173040b7e132307682c160a8b6653f7|0755|sh
+file|/jci/scripts/cmu-overlay-diagnostic.conf|absent|payloads/diagnostic/cmu-overlay-diagnostic.conf|72a381200950a3fb23f32c43d48f1305152b3c64ace9515f8fc5174152a01979|0644|data
