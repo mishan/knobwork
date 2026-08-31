@@ -56,6 +56,7 @@ const TARGET_URL = process.env.EMU_URL || "http://127.0.0.1:8080/";
 const CHROME = resolveChromePath();
 const SCREENSHOT = process.env.EMU_SCREENSHOT || "";
 const EXPECTED_MODE = process.env.EMU_EXPECT_MODE || "mock";
+const REQUIRE_QUEUED_STARTUP = process.env.EMU_REQUIRE_QUEUED_STARTUP === "true";
 const WIDTH = 800;
 const HEIGHT = 480;
 
@@ -94,6 +95,18 @@ function assertHealthMode(health) {
 }
 
 function assertNativeDisplayLifecycle(health) {
+    const readiness = health.proxy.mmuiReadiness;
+    if (!readiness.ready || readiness.notifications < 1
+            || readiness.lastNotification !== "mmui-ready"
+            || !readiness.lastNotificationAt) {
+        throw new Error("native MMUI readiness was not established: " + JSON.stringify(readiness));
+    }
+    if (REQUIRE_QUEUED_STARTUP && readiness.queuedFrontendMessages < 1) {
+        throw new Error(
+            "startup-race regression did not queue a frontend message before MMUI readiness"
+        );
+    }
+
     const display = health.proxy.nativeDisplay;
     const expectedCounts = {
         notifications: 1,
@@ -153,6 +166,7 @@ function summarizeProxyHealth(health) {
     return {
         rootfs: health.rootfs,
         mockFallbackMessages: health.proxy.mockFallbackMessages,
+        mmuiReadiness: health.proxy.mmuiReadiness,
         nativeDisplay: health.proxy.nativeDisplay,
         backends: Object.fromEntries(Object.entries(health.proxy.backends).map(
             ([name, backend]) => [name, {
@@ -176,7 +190,7 @@ function summarizeProxyHealth(health) {
 
 async function waitForNativeProxy() {
     const healthUrl = new URL("/__emu/health", TARGET_URL);
-    const deadline = Date.now() + 10000;
+    const deadline = Date.now() + 45000;
     let health;
     while (Date.now() < deadline) {
         health = await getJson(healthUrl);

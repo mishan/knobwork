@@ -4,11 +4,9 @@ This directory records the analysis of the Mazda Connect Gen 6 CMU firmware and
 the proposed development strategy for improving runtime performance, resilience,
 and the user interface.
 
-The working baseline is the North American `cmu150` firmware
-`74.00.324A`. Earlier `55.00.750B`, `70.00.021B`, and `70.00.100A` packages are
-retained as comparison points.
-
-No firmware in `mzd_packing-scripts/FW` was modified during this analysis, and
+The working baseline is the North American `cmu150` firmware `74.00.324A`.
+Earlier `55.00.750B`, `70.00.021B`, and `70.00.100A` packages are retained as
+comparison points. Firmware is always user-supplied and is not committed here;
 none of the patch concepts documented here have been installed on a CMU.
 
 ## Current conclusions
@@ -46,6 +44,24 @@ The documents use these terms deliberately:
 
 ## Emulator quick start
 
+Prepare a user-supplied update package. By default the transactional extractor
+caches it under ignored `.firmware/<package>` and verifies its source SHA-256
+before reuse:
+
+```sh
+python3 emulate.py unpack /path/to/cmu150_NA_74.00.324A_update.up
+```
+
+Once exactly one package is prepared, it becomes the portable default. Every
+firmware-consuming command also accepts the `.up` directly or an existing
+rootfs explicitly:
+
+```sh
+python3 emulate.py smoke --firmware /path/to/firmware.up
+python3 emulate.py ui --root /path/to/extracted/root
+CMU_ROOTFS=/path/to/extracted/root python3 emulate.py build-guest
+```
+
 The UI server and its regression run as separate commands:
 
 ```sh
@@ -82,8 +98,17 @@ Proxy verification is fail-closed: it never substitutes mock MMUI responses
 when a native guest connection is unavailable. It proves bidirectional text
 traffic through all three stock services and the ordered native display
 lifecycle from `system.IntroAnimation` through `Disclaimer` to `HomeScreen`.
+Frontend startup messages are held until stock MMUI reports `UIAM_Run: success`;
+this removes the former race where a listening port was mistaken for
+an initialized UI service. `DISPLAY_CONTROL_PORT` can be set alongside the
+three service ports when running isolated emulator instances.
 The generated guest preserves the stock display binaries for analysis but uses
 headless `splashplayer`/`nativeguictrl` adapters because QEMU does not implement
 the CMU's Vivante VPU/Wayland stack. The strict regression now requires a real
 MMUI Home context and a populated stock menu icon; the deterministic mock
 regression remains the broader commander/navigation test.
+
+Portable, non-overwriting package tools are also available through
+`python3 emulate.py unpack` / `python3 emulate.py pack` and directly under
+[`tools/firmware`](tools/firmware). Repacking does not create a valid Mazda RSA
+signature and is not, by itself, safe to flash.

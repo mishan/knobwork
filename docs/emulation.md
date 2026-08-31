@@ -65,8 +65,8 @@ four stages:
 
 ## Existing `mazda_emulation` repository
 
-The repository at `/home/user/w/mazda_emulation` is a UI emulator, not a
-machine emulator.
+The sibling `mazda_emulation` repository reviewed for this project is a UI
+emulator, not a machine emulator.
 
 It provides:
 
@@ -101,8 +101,8 @@ not discarded.
 
 ### Custom Application SDK (CASDK)
 
-The local checkout at `/home/user/w/mazda-custom-application-sdk` is useful,
-but as reference material rather than a drop-in current runtime:
+The `mazda-custom-application-sdk` checkout is useful as reference material
+rather than a drop-in current runtime:
 
 - its latest local commit is from 2016-09-22;
 - the top-level package is version 0.0.4 and explicitly alpha;
@@ -339,9 +339,12 @@ accepted until the new kernel has passed the system-mode regression.
 
 ## Running the verified baseline
 
-From `/path/to/workspace/mazda-cmu-tools`:
+From this repository:
 
 ```sh
+# Once per firmware package; the .up can live anywhere.
+python3 emulate.py unpack /path/to/cmu150_NA_74.00.324A_update.up
+
 # Terminal 1: stock browser HMI plus stateful mock backend
 python3 emulate.py ui
 
@@ -375,6 +378,23 @@ the ordered stock MMUI lifecycle through native `HomeScreen`. The transition is
 not fabricated in browser state: the bridge supplies only the missing native
 display/BLM edges, then requires stock MMUI context messages and a populated
 stock `.MainMenuCtrlIconName` element.
+
+Proxy startup is gated on the guest's `UIAM_Run: success` log marker, not merely
+an open port. Messages sent by an early browser are bounded and queued until a
+guest heartbeat reaches the display-control listener. For concurrent runs, set
+the same isolated service and control ports for both processes:
+
+```sh
+MMUI_PORT=5700 DBAPI_PORT=5766 APPSDK_PORT=5800 DISPLAY_CONTROL_PORT=5990 \
+  python3 emulate.py system
+MMUI_PORT=5700 DBAPI_PORT=5766 APPSDK_PORT=5800 DISPLAY_CONTROL_PORT=5990 \
+  python3 emulate.py ui --proxy
+```
+
+The regression can force the timing window with
+`EMU_MMUI_READINESS_HOLD_MS=3000` on the proxy and
+`EMU_REQUIRE_QUEUED_STARTUP=true` on `verify_ui.js`. Both are test controls;
+normal startup uses no artificial hold.
 
 Only applications backed by running guest services become available, so proxy
 mode still has fewer optional entries than the all-enabled mock menu. The core

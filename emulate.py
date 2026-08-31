@@ -11,36 +11,50 @@ import subprocess
 import argparse
 import shutil
 
+from emulation.firmware_input import (
+    FirmwareInputError,
+    discover_default_rootfs,
+    resolve_rootfs,
+    unpack_firmware,
+)
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-def resolve_default_rootfs() -> str:
-    candidates = [
-        "/path/to/workspace/mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root",
-        "/home/user/w/mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root",
-        os.path.abspath(os.path.join(BASE_DIR, "../mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root")),
-    ]
-    for c in candidates:
-        if os.path.exists(c):
-            return c
-    return candidates[0]
-
-DEFAULT_ROOTFS = resolve_default_rootfs()
 SYSTEM_MODE_DIR = os.path.join(BASE_DIR, "emulation/system_mode")
 DEFAULT_KERNEL = os.path.join(SYSTEM_MODE_DIR, "cache/vmlinuz-armmp")
 DEFAULT_INSTALLER_INITRD = os.path.join(SYSTEM_MODE_DIR, "cache/debian-installer-initrd.gz")
 DEFAULT_INITRAMFS = os.path.join(SYSTEM_MODE_DIR, "build/initramfs.cpio.gz")
 DEFAULT_GUEST_OUTPUT = os.path.join(SYSTEM_MODE_DIR, "build")
 
+
+def selected_rootfs(args) -> str:
+    return str(
+        resolve_rootfs(
+            root=args.root,
+            firmware=args.firmware,
+            work_dir=args.firmware_work_dir,
+        )
+    )
+
+
+def add_firmware_input_arguments(parser):
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--root", help="Previously extracted CMU rootfs")
+    group.add_argument("--firmware", metavar="FILE.up", help="Firmware package to unpack and use")
+    parser.add_argument(
+        "--firmware-work-dir",
+        help="Extraction directory (default: repo-local .firmware/<package>)",
+    )
+
 def cmd_smoke(args):
     smoke_script = os.path.join(BASE_DIR, "emulation/user_mode/run_smoke.py")
-    cmd = [sys.executable, smoke_script, "--root", args.root]
+    cmd = [sys.executable, smoke_script, "--root", selected_rootfs(args)]
     return subprocess.run(cmd).returncode
 
 def cmd_ui(args):
     server_script = os.path.join(BASE_DIR, "emulation/harness/server.js")
     env = os.environ.copy()
     env["HTTP_PORT"] = str(args.port)
-    env["ROOTFS_PATH"] = args.root
+    env["ROOTFS_PATH"] = selected_rootfs(args)
     if args.proxy:
         env["PROXY_MODE"] = "true"
 
@@ -74,7 +88,7 @@ def cmd_build_guest(args):
     cmd = [
         sys.executable,
         build_script,
-        "--root", args.root,
+        "--root", selected_rootfs(args),
         "--output", args.output,
         "--installer-initrd", args.installer_initrd,
     ]
@@ -114,13 +128,32 @@ def cmd_inject(args):
     cmd = [sys.executable, injector_script, "--scenario", args.scenario, "--url", args.url]
     return subprocess.run(cmd).returncode
 
+
+def cmd_unpack(args):
+    rootfs = unpack_firmware(args.firmware, args.output)
+    print(f"[EMU] Use this rootfs with --root {rootfs}")
+    return 0
+
+
+def cmd_pack(args):
+    pack_script = os.path.join(BASE_DIR, "tools/firmware/pack_cmu.sh")
+    cmd = ["bash", pack_script, args.source, args.output]
+    if args.signature:
+        cmd.append(args.signature)
+    return subprocess.run(cmd).returncode
+
 def cmd_status(args):
     print("=" * 60)
     print(" Mazda CMU Firmware Emulation Environment Status")
     print("=" * 60)
 
     print(f"- Base Directory: {BASE_DIR}")
-    print(f"- Stock v74 Rootfs Exists: {os.path.exists(DEFAULT_ROOTFS)}")
+    try:
+        default_rootfs = discover_default_rootfs()
+    except FirmwareInputError as error:
+        default_rootfs = None
+        print(f"- Firmware selection error: {error}")
+    print(f"- Selected rootfs: {default_rootfs or 'NONE'}")
     print(f"- Generic ARM Kernel Cached: {os.path.exists(DEFAULT_KERNEL)}")
     print(f"- Matching ARM Modules Cached: {os.path.exists(DEFAULT_INSTALLER_INITRD)}")
     print(f"- Minimal Guest Initramfs Built: {os.path.exists(DEFAULT_INITRAMFS)}")
@@ -139,13 +172,13 @@ def main():
 
     # smoke
     p_smoke = subparsers.add_parser("smoke", help="Run Stage 1 ARM userspace smoke runner & JS audit")
-    p_smoke.add_argument("--root", default=DEFAULT_ROOTFS, help="Rootfs path")
+    add_firmware_input_arguments(p_smoke)
     p_smoke.set_defaults(func=cmd_smoke)
 
     # ui
     p_ui = subparsers.add_parser("ui", help="Run Stage 0 HMI Web UI Harness")
     p_ui.add_argument("--port", type=int, default=8080, help="HTTP server port")
-    p_ui.add_argument("--root", default=DEFAULT_ROOTFS, help="Rootfs path")
+    add_firmware_input_arguments(p_ui)
     p_ui.add_argument("--proxy", action="store_true", help="Proxy WebSockets to QEMU guest")
     p_ui.set_defaults(func=cmd_ui)
 
@@ -173,7 +206,7 @@ def main():
 
     # build-guest
     p_bg = subparsers.add_parser("build-guest", help="Build the non-mutating minimal ARM initramfs")
-    p_bg.add_argument("--root", default=DEFAULT_ROOTFS, help="Rootfs path")
+    add_firmware_input_arguments(p_bg)
     p_bg.add_argument("--output", default=DEFAULT_GUEST_OUTPUT, help="Build output directory")
     p_bg.add_argument(
         "--installer-initrd",
@@ -195,7 +228,7 @@ def main():
     )
     p_vsys.add_argument("--kernel", default=DEFAULT_KERNEL, help="QEMU-compatible ARM kernel")
     p_vsys.add_argument("--initramfs", default=DEFAULT_INITRAMFS, help="Emulator initramfs")
-    p_vsys.add_argument("--timeout", type=float, default=12.0, help="Boot timeout in seconds")
+    p_vsys.add_argument("--timeout", type=float, default=45.0, help="Boot timeout in seconds")
     p_vsys.set_defaults(func=cmd_verify_system)
 
     # nvram
@@ -211,12 +244,28 @@ def main():
     p_inj.add_argument("--url", default="ws://127.0.0.1:2700", help="WebSocket URL")
     p_inj.set_defaults(func=cmd_inject)
 
+    # firmware package tools
+    p_unpack = subparsers.add_parser("unpack", help="Unpack a user-supplied CMU .up package")
+    p_unpack.add_argument("firmware", metavar="FILE.up", help="Firmware update package")
+    p_unpack.add_argument("--output", help="Destination directory")
+    p_unpack.set_defaults(func=cmd_unpack)
+
+    p_pack = subparsers.add_parser("pack", help="Repack an extracted CMU firmware tree")
+    p_pack.add_argument("source", help="Directory produced by the unpack command")
+    p_pack.add_argument("output", metavar="OUTPUT.up", help="New update package")
+    p_pack.add_argument("--signature", help="32-character hexadecimal package comment")
+    p_pack.set_defaults(func=cmd_pack)
+
     # status
     p_st = subparsers.add_parser("status", help="Display emulation environment status")
     p_st.set_defaults(func=cmd_status)
 
     args = parser.parse_args()
-    sys.exit(args.func(args))
+    try:
+        result = args.func(args)
+    except (FirmwareInputError, subprocess.CalledProcessError) as error:
+        parser.error(str(error))
+    sys.exit(result)
 
 if __name__ == "__main__":
     main()

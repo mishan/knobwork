@@ -68,8 +68,8 @@ be introduced incrementally.
 
 ## Custom Application SDK assessment
 
-The local `/home/user/w/mazda-custom-application-sdk` checkout is useful as a
-protocol and application-architecture reference. It includes lifecycle,
+The `mazda-custom-application-sdk` checkout is useful as a protocol and
+application-architecture reference. It includes lifecycle,
 controller, persistent-storage, vehicle-data, AppDrive/resource loading, and a
 port-9700 Node bridge. It is an alpha-era 2016 codebase, however, and is not a
 drop-in v74 runtime.

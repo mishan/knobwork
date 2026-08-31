@@ -2,8 +2,9 @@
 
 ## Local firmware set
 
-The source packages are under `../mzd_packing-scripts/FW` relative to this
-research directory.
+The source packages were reviewed from a separate firmware workspace. The
+tools now accept packages from any path; all `.up` files are immutable,
+user-supplied inputs.
 
 | Firmware | Package form | Package size | SHA-256 |
 | --- | --- | ---: | --- |
@@ -146,4 +147,3 @@ The build metadata reports:
 - `JCI_SW_VER_PATCH="A"`
 - build time `Tue Aug 30 07:10:46 2022 GMT`
 - target `xse-cmu-01.01.255_armv7le`
-

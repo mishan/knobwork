@@ -12,18 +12,8 @@ import glob
 import json
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-def resolve_default_rootfs() -> str:
-    candidates = [
-        "/path/to/workspace/mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root",
-        "/home/user/w/mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root",
-        os.path.abspath(os.path.join(BASE_DIR, "../mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root")),
-    ]
-    for c in candidates:
-        if os.path.exists(c):
-            return c
-    return candidates[0]
-
-DEFAULT_ROOTFS = resolve_default_rootfs()
+sys.path.insert(0, BASE_DIR)
+from emulation.firmware_input import FirmwareInputError, resolve_rootfs
 
 def check_qemu():
     """Verify qemu-arm binary is available on system."""
@@ -140,6 +130,10 @@ def run_suite(rootfs):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Stage 1 ARM Userspace Smoke Runner")
-    parser.add_argument("--root", default=DEFAULT_ROOTFS, help="Path to extracted rootfs")
+    parser.add_argument("--root", help="Path to extracted rootfs (or set CMU_ROOTFS)")
     args = parser.parse_args()
-    run_suite(args.root)
+    try:
+        rootfs = resolve_rootfs(root=args.root)
+    except FirmwareInputError as error:
+        parser.error(str(error))
+    run_suite(str(rootfs))

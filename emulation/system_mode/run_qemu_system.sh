@@ -11,6 +11,7 @@ CPUS="${QEMU_CPUS:-2}"
 MMUI_PORT="${MMUI_PORT:-2700}"
 DBAPI_PORT="${DBAPI_PORT:-2766}"
 APPSDK_PORT="${APPSDK_PORT:-2800}"
+DISPLAY_CONTROL_PORT="${DISPLAY_CONTROL_PORT:-2990}"
 
 for port in "$MMUI_PORT" "$DBAPI_PORT" "$APPSDK_PORT"; do
     if [[ ! "$port" =~ ^[0-9]+$ ]] || (( port < 1 || port > 55535 )); then
@@ -18,6 +19,12 @@ for port in "$MMUI_PORT" "$DBAPI_PORT" "$APPSDK_PORT"; do
         exit 2
     fi
 done
+
+if [[ ! "$DISPLAY_CONTROL_PORT" =~ ^[0-9]+$ ]] \
+        || (( DISPLAY_CONTROL_PORT < 1 || DISPLAY_CONTROL_PORT > 65535 )); then
+    echo "[EMU-SYS] Invalid display-control port: $DISPLAY_CONTROL_PORT" >&2
+    exit 2
+fi
 
 MMUI_HOST_PORT=$((MMUI_PORT + 10000))
 DBAPI_HOST_PORT=$((DBAPI_PORT + 10000))
@@ -60,7 +67,7 @@ QEMU_ARGS=(
     -smp "$CPUS"
     -kernel "$KERNEL"
     -initrd "$INITRAMFS"
-    -append "console=ttyAMA0 rdinit=/init panic=-1 ${QEMU_KERNEL_ARGS:-}"
+    -append "console=ttyAMA0 rdinit=/init panic=-1 cmu_display_control_port=${DISPLAY_CONTROL_PORT} ${QEMU_KERNEL_ARGS:-}"
     "${NETWORK[@]}"
     "${INPUT[@]}"
     -nographic

@@ -1,11 +1,11 @@
 # Evidence, hashes, and sources
 
-## Local paths
+## Reviewed workspace layout
 
 Firmware workspace:
 
 ```text
-/home/user/w/mzd_packing-scripts/FW
+<firmware-workspace>/FW
 ```
 
 Unpacked trees currently retained there:
@@ -22,19 +22,19 @@ failsafe and reinstall packages remain in `FW` and are identified by hashes in
 Existing UI emulator:
 
 ```text
-/home/user/w/mazda_emulation
+<workspace>/mazda_emulation
 ```
 
 Local Custom Application SDK checkout:
 
 ```text
-/home/user/w/mazda-custom-application-sdk
+<workspace>/mazda-custom-application-sdk
 ```
 
 Local TouchTune checkout:
 
 ```text
-/home/user/w/TouchTune
+<workspace>/TouchTune
 commit fb0cfd7211a0c5b55115fd5485d814b7f8338748
 release 1.1.0
 ```
@@ -75,7 +75,7 @@ v74 recovery cleanup:
 Package hashes:
 
 ```sh
-sha256sum /home/user/w/mzd_packing-scripts/FW/*.up
+sha256sum /path/to/firmware/*.up
 ```
 
 Root and UI inventory:

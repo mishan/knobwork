@@ -36,17 +36,24 @@ REQUIRED_MARKERS = (
     "CMU_APPSDK_READY",
     "CMU_DBAPI_READY",
     "CMU_MMUI_READY",
+    "CMU_MMUI_UI_READY",
     "CMU_EMULATOR_READY",
 )
 
-HOST_FORWARD_PORTS = (12700, 12766, 12800)
+def configured_host_forward_ports() -> tuple[int, int, int]:
+    guest_ports = (
+        int(os.environ.get("MMUI_PORT", "2700")),
+        int(os.environ.get("DBAPI_PORT", "2766")),
+        int(os.environ.get("APPSDK_PORT", "2800")),
+    )
+    return tuple(port + 10000 for port in guest_ports)
 
 
 def occupied_host_forward_ports() -> list[int]:
     import socket
 
     occupied = []
-    for port in HOST_FORWARD_PORTS:
+    for port in configured_host_forward_ports():
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 s.settimeout(0.5)

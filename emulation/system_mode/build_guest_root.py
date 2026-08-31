@@ -17,22 +17,13 @@ import pathlib
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+from emulation.firmware_input import FirmwareInputError, resolve_rootfs
 
-def resolve_default_rootfs() -> pathlib.Path:
-    candidates = (
-        pathlib.Path("/path/to/workspace/mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root"),
-        pathlib.Path("/home/user/w/mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root"),
-        pathlib.Path(__file__).resolve().parent.parent.parent.parent / "mzd_packing-scripts/FW/cmu150_NA_74.00.324A_update/root",
-    )
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return candidates[0]
-
-
-DEFAULT_ROOTFS = resolve_default_rootfs()
 DEFAULT_OUTPUT = pathlib.Path(__file__).resolve().parent / "build"
 DEFAULT_INSTALLER_INITRD = (
     pathlib.Path(__file__).resolve().parent / "cache" / "debian-installer-initrd.gz"
@@ -264,10 +255,16 @@ fi
 sleep 2
 rm -f "$ready_flag"
 echo "CMU_SPLASHPLAYER_SHIM_COMPLETED pid=$$ surface=$surface" | tee -a "$log" /dev/console
-if printf 'splash-complete surface=%s\n' "$surface" | nc -w 2 10.0.2.2 2990; then
-    echo "CMU_SPLASHPLAYER_SHIM_NOTIFIED surface=$surface endpoint=10.0.2.2:2990" | tee -a "$log" /dev/console
+control_port=2990
+for kernel_arg in $(cat /proc/cmdline); do
+    case "$kernel_arg" in
+        cmu_display_control_port=*) control_port=${kernel_arg#cmu_display_control_port=} ;;
+    esac
+done
+if printf 'splash-complete surface=%s\n' "$surface" | nc -w 2 10.0.2.2 "$control_port"; then
+    echo "CMU_SPLASHPLAYER_SHIM_NOTIFIED surface=$surface endpoint=10.0.2.2:$control_port" | tee -a "$log" /dev/console
 else
-    echo "CMU_SPLASHPLAYER_SHIM_NOTIFY_FAILED surface=$surface endpoint=10.0.2.2:2990" | tee -a "$log" /dev/console
+    echo "CMU_SPLASHPLAYER_SHIM_NOTIFY_FAILED surface=$surface endpoint=10.0.2.2:$control_port" | tee -a "$log" /dev/console
     exit 69
 fi
 """
@@ -281,6 +278,15 @@ mount -t devtmpfs devtmpfs /dev
 mkdir -p /dev/mqueue /dev/shm /dev/input /run/dbus /tmp/dbus /var/run /data /data_persist /config/common/log /etc /home/cmu
 mount -t mqueue mqueue /dev/mqueue 2>/dev/null || true
 mount -t tmpfs tmpfs /dev/shm
+
+DISPLAY_CONTROL_PORT=2990
+for kernel_arg in $(cat /proc/cmdline); do
+    case "$kernel_arg" in
+        cmu_display_control_port=*)
+            DISPLAY_CONTROL_PORT=${kernel_arg#cmu_display_control_port=}
+            ;;
+    esac
+done
 
 CMU_NATIVE_READY=1
 CMU_HARDWARE_READY=1
@@ -559,6 +565,37 @@ if grep -q 'Cannot access file /usr/share/alsa/alsa.conf' \
     CMU_NATIVE_READY=0
 else
     echo "CMU_ALSA_CONFIG_CONSUMER_READY service=jciBLMSettings"
+fi
+
+MMUI_UI_READY=0
+attempt=0
+while [ "$attempt" -lt 30 ]; do
+    if grep -q 'UIAM_Run: success' /tmp/syslog.log 2>/dev/null; then
+        MMUI_UI_READY=1
+        break
+    fi
+    attempt=$((attempt + 1))
+    sleep 1
+done
+if [ "$MMUI_UI_READY" = "1" ]; then
+    echo "CMU_MMUI_UI_READY attempts=$attempt"
+    (
+        notified=0
+        while :; do
+            if printf 'mmui-ready\n' | nc -w 1 10.0.2.2 "$DISPLAY_CONTROL_PORT"; then
+                if [ "$notified" = "0" ]; then
+                    echo "CMU_MMUI_UI_NOTIFIED endpoint=10.0.2.2:$DISPLAY_CONTROL_PORT"
+                fi
+                notified=1
+            else
+                notified=0
+            fi
+            sleep 2
+        done
+    ) &
+else
+    echo "CMU_MMUI_UI_FAILED timeout=30" >&2
+    CMU_NATIVE_READY=0
 fi
 
 if [ "$CMU_NATIVE_READY" = "1" ]; then
@@ -1035,7 +1072,7 @@ def build(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=pathlib.Path, default=DEFAULT_ROOTFS)
+    parser.add_argument("--root", help="Path to extracted rootfs (or set CMU_ROOTFS)")
     parser.add_argument("--output", type=pathlib.Path, default=DEFAULT_OUTPUT)
     parser.add_argument(
         "--installer-initrd",
@@ -1043,7 +1080,11 @@ def main() -> int:
         default=DEFAULT_INSTALLER_INITRD,
     )
     args = parser.parse_args()
-    build(args.root, args.output, args.installer_initrd)
+    try:
+        rootfs = resolve_rootfs(root=args.root)
+    except FirmwareInputError as error:
+        parser.error(str(error))
+    build(rootfs, args.output, args.installer_initrd)
     return 0
 
 
