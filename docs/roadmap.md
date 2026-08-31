@@ -14,8 +14,9 @@
 
 **Status:** implemented off-target with a hash-pinned diagnostic overlay,
 transaction/fault regressions, and a fail-open Service Manager boot-health
-bridge. Bench-CMU validation and a browser-level success signal remain required
-before a framework overlay is added. See
+bridge. Interrupted transactions are restart-recoverable from durable rollback
+records. Bench-CMU validation and a browser-level success signal remain
+required before a framework overlay is added. See
 [`overlay/README.md`](../overlay/README.md).
 
 Adapt the v74 USB filename launcher pattern into a general overlay installer.

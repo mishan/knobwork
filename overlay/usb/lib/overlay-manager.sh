@@ -11,6 +11,7 @@ OVERLAY_BACKUP_DIR="$OVERLAY_DATA_DIR/backups/files"
 OVERLAY_NVRAM_BACKUP_DIR="$OVERLAY_DATA_DIR/backups/nvram"
 OVERLAY_STATE_FILE="$OVERLAY_DATA_DIR/state"
 OVERLAY_ATTEMPT_FILE="$OVERLAY_DATA_DIR/boot-attempts"
+OVERLAY_ACTIVE_TRANSACTION="$OVERLAY_DATA_DIR/active-transaction"
 OVERLAY_DATA_LOG="$OVERLAY_DATA_DIR/journal.log"
 OVERLAY_USB_REAL=$(readlink -f "$OVERLAY_USB_DIR" 2>/dev/null || printf '%s' "$OVERLAY_USB_DIR")
 OVERLAY_DATA_REAL=$(readlink -f "$OVERLAY_DATA_DIR" 2>/dev/null || true)
@@ -24,6 +25,7 @@ OVERLAY_TMP="/tmp/cmu-overlay.$$"
 OVERLAY_ENTRIES="$OVERLAY_TMP.entries"
 OVERLAY_NVRAM_ENTRIES="$OVERLAY_TMP.nvram"
 OVERLAY_TXN_DIR=""
+OVERLAY_TXN_ID=""
 OVERLAY_ROLLBACK_COUNT=0
 OVERLAY_INITIAL_MOUNT=""
 OVERLAY_MOUNT_CHANGED=0
@@ -52,6 +54,13 @@ overlay_journal() {
 
 overlay_fail_injected() {
     [ "${MZD_OVERLAY_FAIL_POINT:-}" = "$1" ]
+}
+
+overlay_crash_injected() {
+    [ "${MZD_OVERLAY_TEST_MODE:-0}" = "1" ] || return 0
+    [ "${MZD_OVERLAY_CRASH_POINT:-}" = "$1" ] || return 0
+    overlay_stderr "simulated process loss at $1"
+    exit 99
 }
 
 overlay_sync() {
@@ -150,6 +159,7 @@ overlay_init_environment() {
         OVERLAY_NVRAM_BACKUP_DIR="$OVERLAY_DATA_DIR/backups/nvram"
         OVERLAY_STATE_FILE="$OVERLAY_DATA_DIR/state"
         OVERLAY_ATTEMPT_FILE="$OVERLAY_DATA_DIR/boot-attempts"
+        OVERLAY_ACTIVE_TRANSACTION="$OVERLAY_DATA_DIR/active-transaction"
         OVERLAY_DATA_LOG="$OVERLAY_DATA_DIR/journal.log"
     else
         [ -d /jci ] || {
@@ -163,6 +173,7 @@ overlay_init_environment() {
         mkdir -p /tmp/mnt/data 2>/dev/null || return 1
         [ -e /data ] || ln -s /tmp/mnt/data /data 2>/dev/null || mkdir -p /data || return 1
     fi
+    OVERLAY_NVRAM_DIR="${MZD_OVERLAY_NVRAM_DIR:-$OVERLAY_ROOT_PREFIX/sys/class/nvram/nv-config}"
     return 0
 }
 
@@ -241,15 +252,31 @@ overlay_choose_action() {
 overlay_guard_acquire() {
     overlay_guard="${MZD_OVERLAY_GUARD_DIR:-/tmp/cmu-overlay-manager.guard}"
     if ! mkdir "$overlay_guard" 2>/dev/null; then
-        overlay_stderr "another overlay action is already running"
-        return 1
+        overlay_guard_pid=$(cat "$overlay_guard/pid" 2>/dev/null || true)
+        case "$overlay_guard_pid" in
+            ''|*[!0-9]*) overlay_guard_pid=0 ;;
+        esac
+        if [ "$overlay_guard_pid" -gt 0 ] && kill -0 "$overlay_guard_pid" 2>/dev/null; then
+            overlay_stderr "another overlay action is already running"
+            return 1
+        fi
+        rm -f "$overlay_guard/pid" 2>/dev/null || return 1
+        rmdir "$overlay_guard" 2>/dev/null || return 1
+        mkdir "$overlay_guard" 2>/dev/null || return 1
     fi
+    printf '%s\n' "$$" > "$overlay_guard/pid" || {
+        rmdir "$overlay_guard" 2>/dev/null
+        return 1
+    }
     OVERLAY_GUARD_DIR=$overlay_guard
     return 0
 }
 
 overlay_guard_release() {
-    [ -n "${OVERLAY_GUARD_DIR:-}" ] && rmdir "$OVERLAY_GUARD_DIR" 2>/dev/null
+    if [ -n "${OVERLAY_GUARD_DIR:-}" ]; then
+        rm -f "$OVERLAY_GUARD_DIR/pid" 2>/dev/null
+        rmdir "$OVERLAY_GUARD_DIR" 2>/dev/null
+    fi
     OVERLAY_GUARD_DIR=""
 }
 
@@ -287,7 +314,16 @@ overlay_capture_safety_state() {
     return 0
 }
 
+overlay_reset_safety_tracking() {
+    OVERLAY_INITIAL_MOUNT=""
+    OVERLAY_MOUNT_CHANGED=0
+    OVERLAY_WATCHDOG_VALUE=""
+    OVERLAY_WATCHDOG_CHANGED=0
+    OVERLAY_MUTATION_STARTED=0
+}
+
 overlay_enter_mutation_state() {
+    [ "$OVERLAY_MUTATION_STARTED" = "0" ] || return 0
     OVERLAY_MUTATION_STARTED=1
     if [ -n "$OVERLAY_WATCHDOG_VALUE" ]; then
         printf '1\n' > "$OVERLAY_WATCHDOG_PATH" || return 1
@@ -465,11 +501,15 @@ overlay_backup_status() {
         [ ! -L "$overlay_backup_mode" ] || return 1
     if [ "$overlay_stock" = absent ]; then
         [ ! -e "$overlay_backup" ] && [ ! -e "$overlay_backup_mode" ] || return 1
-        if [ -e "$overlay_backup.absent" ]; then printf 'valid\n'; else printf 'missing\n'; fi
+        if [ -f "$overlay_backup.absent" ]; then printf 'valid\n'; else printf 'missing\n'; fi
     else
         [ ! -e "$overlay_backup.absent" ] || return 1
         if [ -f "$overlay_backup" ]; then
             [ "$(overlay_sha256 "$overlay_backup")" = "$overlay_stock" ] || return 1
+            [ -e "$overlay_backup_mode" ] || {
+                printf 'incomplete\n'
+                return 0
+            }
             [ -f "$overlay_backup_mode" ] || return 1
             overlay_saved_mode=$(cat "$overlay_backup_mode") || return 1
             case "$overlay_saved_mode" in
@@ -478,8 +518,17 @@ overlay_backup_status() {
             esac
             printf 'valid\n'
         else
-            [ ! -e "$overlay_backup_mode" ] || return 1
-            printf 'missing\n'
+            if [ -e "$overlay_backup_mode" ]; then
+                [ -f "$overlay_backup_mode" ] || return 1
+                overlay_saved_mode=$(cat "$overlay_backup_mode") || return 1
+                case "$overlay_saved_mode" in
+                    [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) ;;
+                    *) return 1 ;;
+                esac
+                printf 'incomplete\n'
+            else
+                printf 'missing\n'
+            fi
         fi
     fi
 }
@@ -534,6 +583,9 @@ overlay_preflight() {
         fi
         overlay_backup_state=$(overlay_backup_status "$overlay_target" "$overlay_stock") || return 1
         if [ "$overlay_current" = "$overlay_payload_hash" ] && [ "$overlay_backup_state" != valid ]; then
+            return 1
+        fi
+        if [ "$overlay_backup_state" = incomplete ] && [ "$overlay_current" != "$overlay_stock" ]; then
             return 1
         fi
     done < "$OVERLAY_ENTRIES"
@@ -596,6 +648,9 @@ overlay_create_backup() {
         chmod 0444 "$overlay_backup.absent" || return 1
     else
         [ "$(overlay_hash_or_absent "$overlay_live")" = "$overlay_stock" ] || return 1
+        if [ "$overlay_backup_state" = incomplete ]; then
+            rm -f "$overlay_backup" "$overlay_backup.mode" || return 1
+        fi
         overlay_backup_stage="$overlay_backup.$$.stage"
         overlay_backup_mode="$overlay_backup.mode"
         overlay_backup_mode_stage="$overlay_backup_mode.$$.stage"
@@ -638,15 +693,25 @@ overlay_record_rollback() {
     overlay_target=$1
     overlay_live=$2
     OVERLAY_ROLLBACK_COUNT=$((OVERLAY_ROLLBACK_COUNT + 1))
-    overlay_parent=$(dirname "$overlay_live")
-    overlay_rollback="$overlay_parent/.cmu-overlay.$$.rollback.$OVERLAY_ROLLBACK_COUNT"
+    overlay_rollback="$OVERLAY_TXN_DIR/previous.$OVERLAY_ROLLBACK_COUNT"
     if [ -f "$overlay_live" ]; then
         cp -p "$overlay_live" "$overlay_rollback" || return 1
-        overlay_previous=$overlay_rollback
+        overlay_previous_hash=$(overlay_sha256 "$overlay_rollback") || return 1
+        overlay_previous_mode=$(stat -c '%a' "$overlay_live" 2>/dev/null) || return 1
+        case "$overlay_previous_mode" in
+            [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) ;;
+            *) return 1 ;;
+        esac
+        chmod a-w "$overlay_rollback" || return 1
     else
-        overlay_previous=absent
+        overlay_previous_hash=absent
+        overlay_previous_mode=absent
     fi
-    printf 'file|%s|%s\n' "$overlay_target" "$overlay_previous" > "$OVERLAY_TXN_DIR/rollback.$OVERLAY_ROLLBACK_COUNT" || return 1
+    overlay_write_atomic "$OVERLAY_TXN_DIR/rollback.$OVERLAY_ROLLBACK_COUNT" \
+        "file|$overlay_target|$overlay_previous_hash|$overlay_previous_mode" || return 1
+    overlay_sync || return 1
+    overlay_write_atomic "$OVERLAY_TXN_DIR/rollback-count" "$OVERLAY_ROLLBACK_COUNT" || return 1
+    overlay_sync || return 1
 }
 
 overlay_write_nvram() {
@@ -655,8 +720,13 @@ overlay_write_nvram() {
     overlay_expected_hash=$3
     overlay_key_file="$OVERLAY_NVRAM_DIR/keys/$overlay_key"
     overlay_previous_value=$(cat "$overlay_key_file") || return 1
+    overlay_previous_hash=$(overlay_sha256_value "$overlay_previous_value") || return 1
     OVERLAY_ROLLBACK_COUNT=$((OVERLAY_ROLLBACK_COUNT + 1))
-    printf 'nvram|%s|%s\n' "$overlay_key" "$overlay_previous_value" > "$OVERLAY_TXN_DIR/rollback.$OVERLAY_ROLLBACK_COUNT" || return 1
+    overlay_write_atomic "$OVERLAY_TXN_DIR/rollback.$OVERLAY_ROLLBACK_COUNT" \
+        "nvram|$overlay_key|$overlay_previous_hash|$overlay_previous_value" || return 1
+    overlay_sync || return 1
+    overlay_write_atomic "$OVERLAY_TXN_DIR/rollback-count" "$OVERLAY_ROLLBACK_COUNT" || return 1
+    overlay_sync || return 1
     overlay_fail_injected "nvram:$overlay_key" && return 1
     printf '%s=%s\n' "$overlay_key" "$overlay_value" > "$OVERLAY_NVRAM_DIR/add" || return 1
     printf '%s\n' "$overlay_value" > "$overlay_key_file" || return 1
@@ -665,6 +735,7 @@ overlay_write_nvram() {
     overlay_actual_hash=$(overlay_sha256_value "$overlay_actual_value") || return 1
     [ "$overlay_actual_value" = "$overlay_value" ] && [ "$overlay_actual_hash" = "$overlay_expected_hash" ] || return 1
     overlay_journal INFO "nvram=ok key=$overlay_key sha256=$overlay_expected_hash" || return 1
+    overlay_crash_injected "mutation:$OVERLAY_ROLLBACK_COUNT"
 }
 
 overlay_replace_with_file() {
@@ -684,6 +755,7 @@ overlay_replace_with_file() {
     mv -f "$overlay_stage" "$overlay_live" || return 1
     [ "$(overlay_sha256 "$overlay_live")" = "$overlay_expected" ] || return 1
     overlay_journal INFO "replace=ok target=$overlay_target sha256=$overlay_expected" || return 1
+    overlay_crash_injected "mutation:$OVERLAY_ROLLBACK_COUNT"
     overlay_fail_injected "replace:$OVERLAY_ROLLBACK_COUNT" && return 1
     return 0
 }
@@ -698,6 +770,7 @@ overlay_replace_with_absent() {
     rm -f "$overlay_removed" || return 1
     [ ! -e "$overlay_live" ] || return 1
     overlay_journal INFO "remove=ok target=$overlay_target" || return 1
+    overlay_crash_injected "mutation:$OVERLAY_ROLLBACK_COUNT"
 }
 
 overlay_restore_target() {
@@ -719,61 +792,275 @@ overlay_restore_target() {
     fi
 }
 
+overlay_manifest_accepts_file_state() {
+    overlay_wanted_target=$1
+    overlay_wanted_hash=$2
+    while IFS='|' read -r overlay_entry_target overlay_stock overlay_payload_rel overlay_payload_hash overlay_mode overlay_type; do
+        if [ "$overlay_entry_target" = "$overlay_wanted_target" ]; then
+            [ "$overlay_wanted_hash" = "$overlay_stock" ] ||
+                [ "$overlay_wanted_hash" = "$overlay_payload_hash" ]
+            return
+        fi
+    done < "$OVERLAY_ENTRIES"
+    return 1
+}
+
+overlay_manifest_accepts_nvram_state() {
+    overlay_wanted_key=$1
+    overlay_wanted_hash=$2
+    overlay_wanted_value=$3
+    while IFS='|' read -r overlay_entry_key overlay_stock_hash overlay_stock_value overlay_payload_hash overlay_payload_value; do
+        if [ "$overlay_entry_key" = "$overlay_wanted_key" ]; then
+            { [ "$overlay_wanted_hash" = "$overlay_stock_hash" ] &&
+                [ "$overlay_wanted_value" = "$overlay_stock_value" ]; } ||
+                { [ "$overlay_wanted_hash" = "$overlay_payload_hash" ] &&
+                    [ "$overlay_wanted_value" = "$overlay_payload_value" ]; }
+            return
+        fi
+    done < "$OVERLAY_NVRAM_ENTRIES"
+    return 1
+}
+
+overlay_load_rollback_count() {
+    [ -r "$OVERLAY_TXN_DIR/rollback-count" ] || return 1
+    OVERLAY_ROLLBACK_COUNT=$(cat "$OVERLAY_TXN_DIR/rollback-count") || return 1
+    case "$OVERLAY_ROLLBACK_COUNT" in ''|*[!0-9]*) return 1 ;; esac
+    overlay_max_rollbacks=$(wc -l < "$OVERLAY_ENTRIES") || return 1
+    overlay_max_nvram=$(wc -l < "$OVERLAY_NVRAM_ENTRIES") || return 1
+    overlay_max_rollbacks=$((overlay_max_rollbacks + overlay_max_nvram))
+    [ "$OVERLAY_ROLLBACK_COUNT" -le "$overlay_max_rollbacks" ]
+}
+
 overlay_rollback() {
+    overlay_load_rollback_count || return 1
     overlay_journal ERROR "transaction=rollback count=$OVERLAY_ROLLBACK_COUNT" || true
     overlay_i=$OVERLAY_ROLLBACK_COUNT
-    overlay_rc=0
     while [ "$overlay_i" -gt 0 ]; do
-        IFS='|' read -r overlay_rollback_type overlay_target overlay_previous < "$OVERLAY_TXN_DIR/rollback.$overlay_i" || {
-            overlay_rc=1
-            overlay_i=$((overlay_i - 1))
-            continue
-        }
+        IFS='|' read -r overlay_rollback_type overlay_target overlay_previous_hash overlay_previous_value overlay_extra < "$OVERLAY_TXN_DIR/rollback.$overlay_i" || return 1
+        [ -z "$overlay_extra" ] || return 1
         case "$overlay_rollback_type" in
             file)
+                overlay_safe_absolute_path "$overlay_target" || return 1
+                overlay_manifest_accepts_file_state "$overlay_target" "$overlay_previous_hash" || return 1
                 overlay_live=$(overlay_target_path "$overlay_target")
-                if [ "$overlay_previous" = absent ]; then
-                    rm -f "$overlay_live" || overlay_rc=1
+                if [ "$overlay_previous_hash" = absent ]; then
+                    [ "$overlay_previous_value" = absent ] || return 1
+                    rm -f "$overlay_live" || return 1
+                    [ "$(overlay_hash_or_absent "$overlay_live")" = absent ] || return 1
                 else
-                    mv -f "$overlay_previous" "$overlay_live" || overlay_rc=1
+                    overlay_is_hex_hash "$overlay_previous_hash" || return 1
+                    case "$overlay_previous_value" in
+                        [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) ;;
+                        *) return 1 ;;
+                    esac
+                    overlay_previous="$OVERLAY_TXN_DIR/previous.$overlay_i"
+                    [ -f "$overlay_previous" ] && [ ! -L "$overlay_previous" ] || return 1
+                    [ "$(overlay_sha256 "$overlay_previous")" = "$overlay_previous_hash" ] || return 1
+                    overlay_parent=$(dirname "$overlay_live")
+                    overlay_stage="$overlay_parent/.cmu-overlay.recovery.$$.stage"
+                    cp -p "$overlay_previous" "$overlay_stage" || return 1
+                    chmod "$overlay_previous_value" "$overlay_stage" || return 1
+                    [ "$(overlay_sha256 "$overlay_stage")" = "$overlay_previous_hash" ] || return 1
+                    mv -f "$overlay_stage" "$overlay_live" || return 1
+                    [ "$(overlay_hash_or_absent "$overlay_live")" = "$overlay_previous_hash" ] || return 1
+                    [ "$(stat -c '%a' "$overlay_live" 2>/dev/null)" = "$overlay_previous_value" ] || return 1
                 fi
-                overlay_journal INFO "rollback=target target=$overlay_target" || overlay_rc=1
+                overlay_journal INFO "rollback=target target=$overlay_target" || return 1
                 ;;
             nvram)
-                printf '%s=%s\n' "$overlay_target" "$overlay_previous" > "$OVERLAY_NVRAM_DIR/add" || overlay_rc=1
-                printf '%s\n' "$overlay_previous" > "$OVERLAY_NVRAM_DIR/keys/$overlay_target" || overlay_rc=1
-                printf '\n' > "$OVERLAY_NVRAM_DIR/commit" || overlay_rc=1
-                [ "$(cat "$OVERLAY_NVRAM_DIR/keys/$overlay_target")" = "$overlay_previous" ] || overlay_rc=1
-                overlay_journal INFO "rollback=nvram key=$overlay_target" || overlay_rc=1
+                overlay_is_hex_hash "$overlay_previous_hash" || return 1
+                [ "$(overlay_sha256_value "$overlay_previous_value")" = "$overlay_previous_hash" ] || return 1
+                overlay_manifest_accepts_nvram_state "$overlay_target" "$overlay_previous_hash" "$overlay_previous_value" || return 1
+                printf '%s=%s\n' "$overlay_target" "$overlay_previous_value" > "$OVERLAY_NVRAM_DIR/add" || return 1
+                printf '%s\n' "$overlay_previous_value" > "$OVERLAY_NVRAM_DIR/keys/$overlay_target" || return 1
+                printf '\n' > "$OVERLAY_NVRAM_DIR/commit" || return 1
+                [ "$(cat "$OVERLAY_NVRAM_DIR/keys/$overlay_target")" = "$overlay_previous_value" ] || return 1
+                overlay_journal INFO "rollback=nvram key=$overlay_target" || return 1
                 ;;
-            *) overlay_rc=1 ;;
+            *) return 1 ;;
         esac
+        overlay_crash_injected "rollback:$overlay_i"
         overlay_i=$((overlay_i - 1))
     done
-    overlay_sync || overlay_rc=1
-    return "$overlay_rc"
+    overlay_sync
 }
 
 overlay_discard_rollback() {
+    overlay_load_rollback_count || return 1
     overlay_i=1
     while [ "$overlay_i" -le "$OVERLAY_ROLLBACK_COUNT" ]; do
-        if [ -r "$OVERLAY_TXN_DIR/rollback.$overlay_i" ]; then
-            IFS='|' read -r overlay_rollback_type overlay_target overlay_previous < "$OVERLAY_TXN_DIR/rollback.$overlay_i"
-            if [ "$overlay_rollback_type" = file ] && [ "$overlay_previous" != absent ]; then
-                rm -f "$overlay_previous" || return 1
-            fi
-        fi
+        rm -f "$OVERLAY_TXN_DIR/previous.$overlay_i" \
+            "$OVERLAY_TXN_DIR/rollback.$overlay_i" || return 1
         overlay_i=$((overlay_i + 1))
     done
     return 0
 }
 
 overlay_write_atomic() {
-    overlay_destination=$1
-    overlay_value=$2
-    overlay_stage="$overlay_destination.$$.stage"
-    printf '%s\n' "$overlay_value" > "$overlay_stage" || return 1
-    mv -f "$overlay_stage" "$overlay_destination" || return 1
+    overlay_atomic_destination=$1
+    overlay_atomic_value=$2
+    overlay_atomic_stage="$overlay_atomic_destination.$$.stage"
+    printf '%s\n' "$overlay_atomic_value" > "$overlay_atomic_stage" || return 1
+    mv -f "$overlay_atomic_stage" "$overlay_atomic_destination" || return 1
+}
+
+overlay_transaction_set_phase() {
+    overlay_phase=$1
+    case "$overlay_phase" in
+        prepared|mutating|rolling-back|rolled-back|committed) ;;
+        *) return 1 ;;
+    esac
+    overlay_write_atomic "$OVERLAY_TXN_DIR/phase" "$overlay_phase" || return 1
+    overlay_sync
+}
+
+overlay_transaction_id_safe() {
+    case "$1" in ''|*[!A-Za-z0-9_.-]*) return 1 ;; esac
+    return 0
+}
+
+overlay_transaction_begin() {
+    overlay_direction=$1
+    [ ! -e "$OVERLAY_ACTIVE_TRANSACTION" ] && [ ! -L "$OVERLAY_ACTIVE_TRANSACTION" ] || return 1
+    overlay_txn_base="$(date -u '+%Y%m%dT%H%M%SZ' 2>/dev/null || printf unknown)-$$"
+    overlay_txn_suffix=0
+    while :; do
+        OVERLAY_TXN_ID="$overlay_txn_base-$overlay_txn_suffix"
+        overlay_transaction_id_safe "$OVERLAY_TXN_ID" || return 1
+        OVERLAY_TXN_DIR="$OVERLAY_DATA_DIR/transactions/$OVERLAY_TXN_ID"
+        [ -e "$OVERLAY_TXN_DIR" ] || [ -L "$OVERLAY_TXN_DIR" ] || break
+        overlay_txn_suffix=$((overlay_txn_suffix + 1))
+        [ "$overlay_txn_suffix" -le 100 ] || return 1
+    done
+    mkdir -p "$OVERLAY_TXN_DIR" "$OVERLAY_BACKUP_DIR" "$OVERLAY_NVRAM_BACKUP_DIR" || return 1
+    OVERLAY_ROLLBACK_COUNT=0
+    overlay_snapshot_metadata || return 1
+    overlay_write_atomic "$OVERLAY_TXN_DIR/format" 1 || return 1
+    overlay_write_atomic "$OVERLAY_TXN_DIR/manifest-sha256" "$OVERLAY_MANIFEST_SHA256" || return 1
+    overlay_write_atomic "$OVERLAY_TXN_DIR/direction" "$overlay_direction" || return 1
+    overlay_write_atomic "$OVERLAY_TXN_DIR/initial-mount" "$OVERLAY_INITIAL_MOUNT" || return 1
+    if [ -n "$OVERLAY_WATCHDOG_VALUE" ]; then
+        overlay_saved_watchdog=$OVERLAY_WATCHDOG_VALUE
+    else
+        overlay_saved_watchdog=absent
+    fi
+    case "$overlay_saved_watchdog" in absent|0|1) ;; *) return 1 ;; esac
+    overlay_write_atomic "$OVERLAY_TXN_DIR/watchdog-value" "$overlay_saved_watchdog" || return 1
+    overlay_write_atomic "$OVERLAY_TXN_DIR/rollback-count" 0 || return 1
+    overlay_transaction_set_phase prepared || return 1
+    overlay_write_atomic "$OVERLAY_ACTIVE_TRANSACTION" "$OVERLAY_TXN_ID" || return 1
+    overlay_sync || return 1
+    overlay_journal INFO "transaction=prepared id=$OVERLAY_TXN_ID direction=$overlay_direction" || return 1
+}
+
+overlay_transaction_load() {
+    [ -f "$OVERLAY_ACTIVE_TRANSACTION" ] && [ ! -L "$OVERLAY_ACTIVE_TRANSACTION" ] || return 1
+    OVERLAY_TXN_ID=$(cat "$OVERLAY_ACTIVE_TRANSACTION") || return 1
+    overlay_transaction_id_safe "$OVERLAY_TXN_ID" || return 1
+    OVERLAY_TXN_DIR="$OVERLAY_DATA_DIR/transactions/$OVERLAY_TXN_ID"
+    [ -d "$OVERLAY_TXN_DIR" ] && [ ! -L "$OVERLAY_TXN_DIR" ] || return 1
+    [ "$(cat "$OVERLAY_TXN_DIR/format" 2>/dev/null)" = 1 ] || return 1
+    [ "$(cat "$OVERLAY_TXN_DIR/manifest-sha256" 2>/dev/null)" = "$OVERLAY_MANIFEST_SHA256" ] || return 1
+    overlay_txn_direction=$(cat "$OVERLAY_TXN_DIR/direction" 2>/dev/null) || return 1
+    case "$overlay_txn_direction" in enabled|factory) ;; *) return 1 ;; esac
+    overlay_txn_phase=$(cat "$OVERLAY_TXN_DIR/phase" 2>/dev/null) || return 1
+    case "$overlay_txn_phase" in prepared|mutating|rolling-back|rolled-back|committed) ;; *) return 1 ;; esac
+    overlay_saved_mount=$(cat "$OVERLAY_TXN_DIR/initial-mount" 2>/dev/null) || return 1
+    case "$overlay_saved_mount" in ro|rw) ;; *) return 1 ;; esac
+    overlay_saved_watchdog=$(cat "$OVERLAY_TXN_DIR/watchdog-value" 2>/dev/null) || return 1
+    case "$overlay_saved_watchdog" in absent|0|1) ;; *) return 1 ;; esac
+    overlay_load_rollback_count || return 1
+    if [ -f "$OVERLAY_TXN_DIR/previous-state" ]; then
+        [ ! -e "$OVERLAY_TXN_DIR/previous-state.absent" ] || return 1
+    else
+        [ -f "$OVERLAY_TXN_DIR/previous-state.absent" ] || return 1
+    fi
+    if [ -f "$OVERLAY_TXN_DIR/previous-attempts" ]; then
+        [ ! -e "$OVERLAY_TXN_DIR/previous-attempts.absent" ] || return 1
+    else
+        [ -f "$OVERLAY_TXN_DIR/previous-attempts.absent" ] || return 1
+    fi
+}
+
+overlay_transaction_restore_saved_safety() {
+    OVERLAY_INITIAL_MOUNT=$overlay_saved_mount
+    OVERLAY_MOUNT_CHANGED=0
+    [ "$(overlay_read_mount_state)" = "$OVERLAY_INITIAL_MOUNT" ] || OVERLAY_MOUNT_CHANGED=1
+    OVERLAY_WATCHDOG_CHANGED=0
+    if [ "$overlay_saved_watchdog" = absent ]; then
+        OVERLAY_WATCHDOG_VALUE=""
+    else
+        OVERLAY_WATCHDOG_VALUE=$overlay_saved_watchdog
+        [ -e "$OVERLAY_WATCHDOG_PATH" ] || return 1
+        [ "$(cat "$OVERLAY_WATCHDOG_PATH")" = "$OVERLAY_WATCHDOG_VALUE" ] || OVERLAY_WATCHDOG_CHANGED=1
+    fi
+    return 0
+}
+
+overlay_transaction_abort() {
+    overlay_transaction_set_phase rolling-back || return 1
+    overlay_rollback || return 1
+    overlay_restore_metadata || return 1
+    overlay_sync || return 1
+    overlay_transaction_set_phase rolled-back
+}
+
+overlay_transaction_cleanup() {
+    overlay_discard_rollback || return 1
+    rm -f "$OVERLAY_TXN_DIR/format" "$OVERLAY_TXN_DIR/manifest-sha256" \
+        "$OVERLAY_TXN_DIR/direction" "$OVERLAY_TXN_DIR/initial-mount" \
+        "$OVERLAY_TXN_DIR/watchdog-value" "$OVERLAY_TXN_DIR/rollback-count" \
+        "$OVERLAY_TXN_DIR/phase" "$OVERLAY_TXN_DIR/previous-state" \
+        "$OVERLAY_TXN_DIR/previous-state.absent" \
+        "$OVERLAY_TXN_DIR/previous-attempts" \
+        "$OVERLAY_TXN_DIR/previous-attempts.absent" || return 1
+    rmdir "$OVERLAY_TXN_DIR" 2>/dev/null || return 1
+}
+
+overlay_transaction_finalize() {
+    [ -n "$OVERLAY_TXN_ID" ] && [ -n "$OVERLAY_TXN_DIR" ] || return 0
+    overlay_phase=$(cat "$OVERLAY_TXN_DIR/phase" 2>/dev/null) || return 1
+    case "$overlay_phase" in committed|rolled-back) ;; *) return 1 ;; esac
+    [ "$(cat "$OVERLAY_ACTIVE_TRANSACTION" 2>/dev/null)" = "$OVERLAY_TXN_ID" ] || return 1
+    rm -f "$OVERLAY_ACTIVE_TRANSACTION" || return 1
+    overlay_sync || return 1
+    overlay_transaction_cleanup || {
+        overlay_journal ERROR "transaction=cleanup_failed id=$OVERLAY_TXN_ID" || true
+        return 1
+    }
+    overlay_journal INFO "transaction=finalized id=$OVERLAY_TXN_ID phase=$overlay_phase" || return 1
+    OVERLAY_TXN_ID=""
+    OVERLAY_TXN_DIR=""
+}
+
+overlay_recover_interrupted_transaction() {
+    [ -e "$OVERLAY_ACTIVE_TRANSACTION" ] || return 0
+    overlay_parse_manifest || return 1
+    overlay_check_firmware || return 1
+    overlay_transaction_load || {
+        overlay_journal ERROR "recovery=invalid_transaction_metadata" || true
+        return 1
+    }
+    overlay_journal ERROR "recovery=detected id=$OVERLAY_TXN_ID phase=$overlay_txn_phase" || return 1
+    overlay_transaction_restore_saved_safety || return 1
+    case "$overlay_txn_phase" in
+        prepared|mutating|rolling-back)
+            overlay_enter_mutation_state || return 1
+            overlay_transaction_abort || return 1
+            overlay_journal INFO "recovery=rolled_back id=$OVERLAY_TXN_ID" || return 1
+            ;;
+        committed)
+            overlay_journal INFO "recovery=commit_retained id=$OVERLAY_TXN_ID" || return 1
+            ;;
+        rolled-back)
+            overlay_journal INFO "recovery=rollback_already_complete id=$OVERLAY_TXN_ID" || return 1
+            ;;
+    esac
+    overlay_restore_safety_state || return 1
+    overlay_transaction_finalize || return 1
+    overlay_reset_safety_tracking
+    overlay_capture_safety_state || return 1
+    overlay_journal INFO "recovery=complete" || return 1
 }
 
 overlay_install_runtime() {
@@ -818,12 +1105,14 @@ overlay_snapshot_metadata() {
 overlay_restore_metadata() {
     overlay_metadata_rc=0
     if [ -f "$OVERLAY_TXN_DIR/previous-state" ]; then
-        mv -f "$OVERLAY_TXN_DIR/previous-state" "$OVERLAY_STATE_FILE" || overlay_metadata_rc=1
+        cp -p "$OVERLAY_TXN_DIR/previous-state" "$OVERLAY_STATE_FILE.$$.recovery" || overlay_metadata_rc=1
+        [ "$overlay_metadata_rc" -ne 0 ] || mv -f "$OVERLAY_STATE_FILE.$$.recovery" "$OVERLAY_STATE_FILE" || overlay_metadata_rc=1
     else
         rm -f "$OVERLAY_STATE_FILE" || overlay_metadata_rc=1
     fi
     if [ -f "$OVERLAY_TXN_DIR/previous-attempts" ]; then
-        mv -f "$OVERLAY_TXN_DIR/previous-attempts" "$OVERLAY_ATTEMPT_FILE" || overlay_metadata_rc=1
+        cp -p "$OVERLAY_TXN_DIR/previous-attempts" "$OVERLAY_ATTEMPT_FILE.$$.recovery" || overlay_metadata_rc=1
+        [ "$overlay_metadata_rc" -ne 0 ] || mv -f "$OVERLAY_ATTEMPT_FILE.$$.recovery" "$OVERLAY_ATTEMPT_FILE" || overlay_metadata_rc=1
     else
         rm -f "$OVERLAY_ATTEMPT_FILE" || overlay_metadata_rc=1
     fi
@@ -867,99 +1156,105 @@ overlay_verify_targets() {
 
 overlay_transaction() {
     overlay_direction=$1
-    OVERLAY_TXN_DIR="$OVERLAY_DATA_DIR/transactions/$(date -u '+%Y%m%dT%H%M%SZ' 2>/dev/null || printf unknown)-$$"
-    mkdir -p "$OVERLAY_TXN_DIR" "$OVERLAY_BACKUP_DIR" "$OVERLAY_NVRAM_BACKUP_DIR" || return 1
-    OVERLAY_ROLLBACK_COUNT=0
-    overlay_snapshot_metadata || return 1
-
-    overlay_enter_mutation_state || return 1
+    overlay_transaction_begin "$overlay_direction" || return 1
+    overlay_enter_mutation_state || {
+        overlay_transaction_abort
+        return 1
+    }
+    overlay_transaction_set_phase mutating || {
+        overlay_transaction_abort
+        return 1
+    }
     while IFS='|' read -r overlay_target overlay_stock overlay_payload_rel overlay_payload_hash overlay_mode overlay_type; do
         overlay_create_backup "$overlay_target" "$overlay_stock" || {
-            overlay_rollback
+            overlay_transaction_abort
             return 1
         }
         if [ "$overlay_direction" = enabled ]; then
             overlay_replace_with_file "$overlay_target" "$OVERLAY_USB_DIR/$overlay_payload_rel" "$overlay_payload_hash" "$overlay_mode" "$overlay_type" || {
-                overlay_rollback
+                overlay_transaction_abort
                 return 1
             }
         else
             overlay_restore_target "$overlay_target" "$overlay_stock" "$overlay_mode" || {
-                overlay_rollback
+                overlay_transaction_abort
                 return 1
             }
         fi
         [ ! -e "$OVERLAY_TMP.interrupted" ] || {
-            overlay_rollback
+            overlay_transaction_abort
             return 1
         }
     done < "$OVERLAY_ENTRIES"
     while IFS='|' read -r overlay_key overlay_stock_hash overlay_stock_value overlay_payload_hash overlay_payload_value; do
         overlay_create_nvram_backup "$overlay_key" "$overlay_stock_hash" "$overlay_stock_value" || {
-            overlay_rollback
+            overlay_transaction_abort
             return 1
         }
         if [ "$overlay_direction" = enabled ]; then
             overlay_write_nvram "$overlay_key" "$overlay_payload_value" "$overlay_payload_hash" || {
-                overlay_rollback
+                overlay_transaction_abort
                 return 1
             }
         else
             overlay_backup="$OVERLAY_NVRAM_BACKUP_DIR/$overlay_key"
             [ "$(overlay_sha256 "$overlay_backup")" = "$overlay_stock_hash" ] || {
-                overlay_rollback
+                overlay_transaction_abort
                 return 1
             }
             overlay_stock_backup_value=$(cat "$overlay_backup") || {
-                overlay_rollback
+                overlay_transaction_abort
                 return 1
             }
             overlay_write_nvram "$overlay_key" "$overlay_stock_backup_value" "$overlay_stock_hash" || {
-                overlay_rollback
+                overlay_transaction_abort
                 return 1
             }
         fi
         [ ! -e "$OVERLAY_TMP.interrupted" ] || {
-            overlay_rollback
+            overlay_transaction_abort
             return 1
         }
     done < "$OVERLAY_NVRAM_ENTRIES"
 
     [ ! -e "$OVERLAY_TMP.interrupted" ] || {
-        overlay_rollback
+        overlay_transaction_abort
         return 1
     }
     overlay_sync || {
-        overlay_rollback
+        overlay_transaction_abort
         return 1
     }
     overlay_fail_injected final-verify && {
-        overlay_rollback
+        overlay_transaction_abort
         return 1
     }
     overlay_verify_targets "$overlay_direction" || {
-        overlay_rollback
+        overlay_transaction_abort
         return 1
     }
     overlay_write_atomic "$OVERLAY_STATE_FILE" "$overlay_direction" || {
-        overlay_rollback
-        overlay_restore_metadata
+        overlay_transaction_abort
         return 1
     }
     overlay_write_atomic "$OVERLAY_ATTEMPT_FILE" 0 || {
-        overlay_rollback
-        overlay_restore_metadata
+        overlay_transaction_abort
         return 1
     }
+    overlay_sync || {
+        overlay_transaction_abort
+        return 1
+    }
+    overlay_crash_injected metadata
     overlay_journal INFO "transaction=committed state=$overlay_direction" || {
-        overlay_rollback
-        overlay_restore_metadata
+        overlay_transaction_abort
         return 1
     }
-    overlay_discard_rollback || {
-        overlay_journal ERROR "transaction=committed rollback_cleanup=failed" || true
+    overlay_transaction_set_phase committed || {
+        overlay_transaction_abort
         return 1
     }
+    overlay_crash_injected committed
     return 0
 }
 
@@ -1058,8 +1353,12 @@ overlay_main() {
         overlay_cleanup_files
         return 1
     }
-    overlay_preflight
+    overlay_recover_interrupted_transaction
     overlay_rc=$?
+    if [ "$overlay_rc" -eq 0 ]; then
+        overlay_preflight
+        overlay_rc=$?
+    fi
     [ ! -e "$OVERLAY_TMP.interrupted" ] || overlay_rc=1
     if [ "$overlay_rc" -eq 0 ]; then
         case "$OVERLAY_ACTION" in
@@ -1084,7 +1383,14 @@ overlay_main() {
         esac
     fi
     [ ! -e "$OVERLAY_TMP.interrupted" ] || overlay_rc=1
-    overlay_restore_safety_state || overlay_rc=1
+    overlay_safety_rc=0
+    overlay_restore_safety_state || {
+        overlay_safety_rc=1
+        overlay_rc=1
+    }
+    if [ "$overlay_safety_rc" -eq 0 ] && [ -n "$OVERLAY_TXN_ID" ]; then
+        overlay_transaction_finalize || overlay_rc=1
+    fi
     if [ "$overlay_rc" -eq 0 ]; then
         overlay_journal INFO "action=result status=ok" || overlay_rc=1
         [ "$overlay_rc" -ne 0 ] || overlay_popup "$OVERLAY_ACTION completed successfully."

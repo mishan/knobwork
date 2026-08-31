@@ -27,6 +27,15 @@ not patch the HMI framework, NVRAM, or native binaries.
 - Replacements are copied into the target directory, verified, and atomically
   renamed. A reverse-order rollback stack is retained until final verification
   and transaction commit.
+- Each transaction publishes a single active pointer only after its manifest,
+  original safety state, metadata snapshot, and initial phase are durable.
+  Every rollback record and previous file/value is synced under `/data` before
+  the corresponding file or NVRAM mutation begins.
+- On the next invocation, an uncommitted active transaction is rolled back
+  idempotently before normal preflight. A transaction whose commit marker was
+  synced is retained. Both paths restore the original root mount and watchdog
+  state before clearing the active pointer; invalid recovery metadata blocks
+  further mutation.
 - The original root mount mode and watchdog value are captured, verified after
   restoration, and failures are returned to the caller.
 - Identical journals are appended on the USB and under `/data/cmu-overlay`.
@@ -45,7 +54,9 @@ earliest Service Manager dependency gate. `stage_3.sh`, which is released only
 after `jciMMUI` starts, records success and resets the counter. Both scripts and
 their helper are fail-open: bookkeeping damage is logged but always returns
 success so it cannot block the stock service graph. Disable, restore, and safe
-mode put the exact stock stage scripts back and remove the helper.
+mode put the exact stock stage scripts back and remove the helper. Installation
+orders the helper before `stage_1.sh`, so the persisted runtime can recover an
+interrupted transaction as soon as the boot stage itself becomes active.
 
 This is a native-service readiness signal, not proof that Opera or HomeScreen
 JavaScript initialized successfully. A future HMI framework overlay must move
@@ -90,5 +101,7 @@ python3 -m unittest discover -s overlay/tests -v
 It covers the full action lifecycle, firmware and manifest rejection, partial
 and unexpected state, rollback at multiple failure points, safety-state
 restoration, the installed boot bridge, third-attempt safe mode, fail-open
-runtime corruption, transactional NVRAM, the no-argument dialog path, and
-JavaScript preflight before remount.
+runtime corruption, transactional NVRAM, simulated process loss during file,
+NVRAM, metadata, commit, and rollback boundaries, corrupted recovery records,
+incomplete backup pairs, the no-argument dialog path, and JavaScript preflight
+before remount.

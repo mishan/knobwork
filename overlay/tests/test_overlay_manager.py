@@ -85,6 +85,7 @@ class OverlayReplica:
         action: str | None,
         *,
         fail_point: str | None = None,
+        crash_point: str | None = None,
         runtime: bool = False,
         hash_tool: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
@@ -103,6 +104,8 @@ class OverlayReplica:
             env.pop("MZD_OVERLAY_USB_LOG", None)
         if fail_point:
             env["MZD_OVERLAY_FAIL_POINT"] = fail_point
+        if crash_point:
+            env["MZD_OVERLAY_CRASH_POINT"] = crash_point
         if hash_tool:
             env["MZD_OVERLAY_TEST_HASH_TOOL"] = hash_tool
         entry = self.usb / "install-patches.sh"
@@ -342,6 +345,131 @@ class OverlayManagerTests(unittest.TestCase):
         self.assertFalse((self.replica.data / "state").exists())
         self.replica.assert_safe(self)
 
+    def test_restart_recovers_a_partially_mutated_transaction(self) -> None:
+        crashed = self.replica.run("install", crash_point="mutation:2")
+        self.assertEqual(crashed.returncode, 99, crashed.stdout + crashed.stderr)
+        self.assertTrue((self.replica.data / "active-transaction").is_file())
+        self.assertEqual(self.replica.mount_state.read_text(), "rw\n")
+        self.assertEqual(self.replica.watchdog.read_text(), "1\n")
+
+        recovered = self.replica.run("verify")
+
+        self.assert_ok(recovered)
+        self.replica.assert_stock_boot_files(self)
+        self.assertTrue(all(not target.exists() for target in self.replica.targets))
+        self.assertFalse((self.replica.data / "active-transaction").exists())
+        self.assertFalse((self.replica.data / "state").exists())
+        self.assertIn("recovery=rolled_back", recovered.stdout)
+        self.replica.assert_safe(self)
+
+    def test_boot_hook_recovers_an_install_interrupted_after_hook_activation(self) -> None:
+        crashed = self.replica.run("install", crash_point="mutation:2")
+        self.assertEqual(crashed.returncode, 99, crashed.stdout + crashed.stderr)
+        self.assertTrue(self.replica.boot_hook.is_file())
+
+        recovered = self.replica.run_boot_hook("attempt")
+
+        self.assert_ok(recovered)
+        self.replica.assert_stock_boot_files(self)
+        self.assertTrue(all(not target.exists() for target in self.replica.targets))
+        self.assertFalse((self.replica.data / "active-transaction").exists())
+        self.assertIn(
+            "action=boot-attempt|result=ok",
+            (self.replica.data / "boot-hook-status").read_text(),
+        )
+        self.replica.assert_safe(self)
+
+    def test_restart_rolls_back_metadata_written_before_commit(self) -> None:
+        crashed = self.replica.run("install", crash_point="metadata")
+        self.assertEqual(crashed.returncode, 99, crashed.stdout + crashed.stderr)
+        self.assertEqual((self.replica.data / "state").read_text().strip(), "enabled")
+
+        recovered = self.replica.run("verify")
+
+        self.assert_ok(recovered)
+        self.assertFalse((self.replica.data / "state").exists())
+        self.replica.assert_stock_boot_files(self)
+        self.assertTrue(all(not target.exists() for target in self.replica.targets))
+        self.replica.assert_safe(self)
+
+    def test_restart_retains_a_durable_commit(self) -> None:
+        crashed = self.replica.run("install", crash_point="committed")
+        self.assertEqual(crashed.returncode, 99, crashed.stdout + crashed.stderr)
+        self.assertEqual((self.replica.data / "state").read_text().strip(), "enabled")
+        self.assertTrue(all(target.exists() for target in self.replica.targets))
+
+        recovered = self.replica.run("verify")
+
+        self.assert_ok(recovered)
+        self.assertEqual((self.replica.data / "state").read_text().strip(), "enabled")
+        self.assertTrue(all(target.exists() for target in self.replica.targets))
+        self.assertIn("recovery=commit_retained", recovered.stdout)
+        self.assertFalse((self.replica.data / "active-transaction").exists())
+        self.replica.assert_safe(self)
+
+    def test_restart_resumes_an_interrupted_rollback_idempotently(self) -> None:
+        crashed = self.replica.run(
+            "install", fail_point="replace:3", crash_point="rollback:2"
+        )
+        self.assertEqual(crashed.returncode, 99, crashed.stdout + crashed.stderr)
+        self.assertTrue((self.replica.data / "active-transaction").is_file())
+
+        recovered = self.replica.run("verify")
+
+        self.assert_ok(recovered)
+        self.replica.assert_stock_boot_files(self)
+        self.assertTrue(all(not target.exists() for target in self.replica.targets))
+        self.assertFalse((self.replica.data / "active-transaction").exists())
+        self.assertIn("phase=rolling-back", recovered.stdout)
+        self.replica.assert_safe(self)
+
+    def test_corrupt_recovery_record_blocks_further_mutation(self) -> None:
+        crashed = self.replica.run("install", crash_point="mutation:2")
+        self.assertEqual(crashed.returncode, 99, crashed.stdout + crashed.stderr)
+        active = (self.replica.data / "active-transaction").read_text().strip()
+        record = self.replica.data / "transactions" / active / "rollback.2"
+        record.write_text("file|/jci/scripts/not-in-manifest|absent|absent\n")
+
+        recovery = self.replica.run("verify")
+
+        self.assert_failed(recovery)
+        self.assertTrue((self.replica.data / "active-transaction").is_file())
+        self.assertTrue(self.replica.stage_targets[0].is_file())
+        self.replica.assert_safe(self)
+
+    def test_restart_recovers_an_interrupted_nvram_mutation(self) -> None:
+        key_file = self.replica.add_nvram_entry(
+            "diagnostic_overlay_state", "factory", "enabled"
+        )
+        crashed = self.replica.run("install", crash_point="mutation:6")
+        self.assertEqual(crashed.returncode, 99, crashed.stdout + crashed.stderr)
+        self.assertEqual(key_file.read_text(), "enabled\n")
+
+        recovered = self.replica.run("verify")
+
+        self.assert_ok(recovered)
+        self.assertEqual(key_file.read_text(), "factory\n")
+        self.replica.assert_stock_boot_files(self)
+        self.assertTrue(all(not target.exists() for target in self.replica.targets))
+        self.replica.assert_safe(self)
+
+    def test_incomplete_backup_pair_is_rebuilt_only_from_stock(self) -> None:
+        target = self.replica.stage_targets[0]
+        backup = self.replica.data / "backups/files" / target.relative_to(
+            self.replica.root
+        )
+        backup.parent.mkdir(parents=True)
+        shutil.copy2(target, backup)
+        backup.chmod(0o555)
+
+        self.assert_ok(self.replica.run("install"))
+
+        mode_backup = backup.with_suffix(backup.suffix + ".mode")
+        self.assertEqual(mode_backup.read_text().strip(), "775")
+        self.assertEqual(
+            sha256(backup), hashlib.sha256(STOCK_STAGE_1.encode("ascii")).hexdigest()
+        )
+
     def test_boot_counter_enters_safe_mode_at_manifest_limit(self) -> None:
         self.assert_ok(self.replica.run("install"))
         self.assert_ok(self.replica.run("boot-attempt", runtime=True))
@@ -414,6 +542,13 @@ class OverlayManagerTests(unittest.TestCase):
         self.assertEqual(self.replica.mount_state.read_text(), "rw\n")
         self.assertEqual(self.replica.watchdog.read_text(), "0\n")
         self.assertTrue(all(target.exists() for target in self.replica.targets))
+        self.assertTrue((self.replica.data / "active-transaction").is_file())
+
+        recovered = self.replica.run("verify")
+        self.assert_ok(recovered)
+        self.assertIn("recovery=commit_retained", recovered.stdout)
+        self.assertFalse((self.replica.data / "active-transaction").exists())
+        self.replica.assert_safe(self)
 
     def test_initial_read_write_mount_state_is_preserved(self) -> None:
         self.replica.mount_state.write_text("rw\n")
