@@ -56,6 +56,7 @@ const TARGET_URL = process.env.EMU_URL || "http://127.0.0.1:8080/";
 const CHROME = resolveChromePath();
 const SCREENSHOT = process.env.EMU_SCREENSHOT || "";
 const EXPECTED_MODE = process.env.EMU_EXPECT_MODE || "mock";
+const EXPECT_OVERLAY_APP = process.env.EMU_EXPECT_OVERLAY_APP === "true";
 const REQUIRE_QUEUED_STARTUP = process.env.EMU_REQUIRE_QUEUED_STARTUP === "true";
 const WIDTH = 800;
 const HEIGHT = 480;
@@ -404,8 +405,23 @@ async function main() {
         if (!["mock", "proxy"].includes(EXPECTED_MODE)) {
             throw new Error("EMU_EXPECT_MODE must be mock or proxy");
         }
+        if (EXPECT_OVERLAY_APP && EXPECTED_MODE !== "mock") {
+            throw new Error("the overlay example verification requires mock mode");
+        }
         const startupHealth = await getJson(new URL("/__emu/health", TARGET_URL));
         assertHealthMode(startupHealth);
+        let overlayStatus = null;
+        if (EXPECT_OVERLAY_APP) {
+            if (!startupHealth.overlayWorkspace) {
+                throw new Error("harness is not serving a validated overlay workspace");
+            }
+            overlayStatus = await getJson(new URL("/__emu/overlay", TARGET_URL));
+            if (!overlayStatus.available || overlayStatus.managerState !== "enabled") {
+                throw new Error(
+                    "overlay manager is not enabled: " + JSON.stringify(overlayStatus)
+                );
+            }
+        }
         const launched = await launchChrome(profileDirectory);
         chrome = launched.child;
         const page = await findPageTarget(launched.browserWebSocketUrl);
@@ -573,6 +589,91 @@ async function main() {
             "the Applications screen"
         );
         await delay(1200);
+        let overlayScreenshot = null;
+        let overlayApplication = null;
+        if (EXPECT_OVERLAY_APP) {
+            await waitForExpression(
+                client,
+                "window.__developerDiagnosticsIntegration && "
+                    + "window.__developerDiagnosticsIntegration.installed === true",
+                "the Developer Diagnostics Applications entry"
+            );
+            overlayApplication = await evaluate(client, "(function () {" +
+                "var system = framework._appInstances.system;" +
+                "var list = system._buildApplicationsDataList();" +
+                "var names = list.items.map(function (item) { return item.text1 || item.text1Id; });" +
+                "var target = list.items.findIndex(function (item) {" +
+                    "return item.appData && item.appData.appName === 'developerdiagnostics';" +
+                "});" +
+                "return {targetIndex:target,names:names};" +
+            "}())");
+            if (overlayApplication.targetIndex < 0) {
+                throw new Error(
+                    "Developer Diagnostics is missing from Applications: "
+                    + JSON.stringify(overlayApplication.names)
+                );
+            }
+            let focused = -1;
+            for (let turn = 0; turn <= overlayApplication.names.length; turn += 1) {
+                focused = await evaluate(
+                    client,
+                    "framework._appInstances.system._currentContextTemplate.list2Ctrl.focussedItem"
+                );
+                if (focused === overlayApplication.targetIndex) break;
+                await pressKey(client, "m", "KeyM", 77, "m");
+                await delay(150);
+            }
+            if (focused !== overlayApplication.targetIndex) {
+                throw new Error(
+                    "commander could not focus Developer Diagnostics; focused=" + focused
+                );
+            }
+            await pressKey(client, "Enter", "Enter", 13);
+            await waitForExpression(
+                client,
+                'framework.getCurrCtxtId() === "DeveloperDiagnostics" && '
+                    + 'framework.getCurrentApp() === "developerdiagnostics" && '
+                    + 'document.body.innerText.includes("Overlay manager")',
+                "the Developer Diagnostics application",
+                15000
+            );
+            await waitForExpression(
+                client,
+                'document.body.innerText.includes("enabled")',
+                "the enabled overlay state in Developer Diagnostics"
+            );
+            const inputDiagnostics = await evaluate(client, "(function () {" +
+                "var app = framework._appInstances.developerdiagnostics;" +
+                "var labels = app._dataList.items.map(function (item) { return item.text1; });" +
+                "return {" +
+                    "hasVehicleInputs:labels.indexOf('Vehicle Inputs (observed by GUI)') >= 0," +
+                    "hasSteeringAngle:labels.indexOf('Steering angle') >= 0," +
+                    "capturedMmui:window.__developerDiagnosticsInputs.mmui.length" +
+                "};" +
+            "}())");
+            if (!inputDiagnostics.hasVehicleInputs
+                    || !inputDiagnostics.hasSteeringAngle
+                    || inputDiagnostics.capturedMmui < 1) {
+                throw new Error(
+                    "vehicle input diagnostics are incomplete: "
+                    + JSON.stringify(inputDiagnostics)
+                );
+            }
+            overlayApplication.inputDiagnostics = inputDiagnostics;
+            await delay(500);
+            const overlayCapture = await client.send("Page.captureScreenshot", {
+                format: "png",
+                captureBeyondViewport: false
+            });
+            overlayScreenshot = Buffer.from(overlayCapture.data, "base64");
+            await pressKey(client, "Backspace", "Backspace", 8);
+            await waitForExpression(
+                client,
+                'framework.getCurrCtxtId() === "Applications"',
+                "return from Developer Diagnostics to Applications"
+            );
+            await delay(1200);
+        }
         await pressKey(client, "Backspace", "Backspace", 8);
         await waitForExpression(
             client,
@@ -587,11 +688,14 @@ async function main() {
             "currentContext:framework.getCurrCtxtId()," +
             "label:document.querySelector('.MainMenuCtrlIconName').innerText," +
             "queueLength:framework._msgQueue.length})");
-        const capture = await client.send("Page.captureScreenshot", {
-            format: "png",
-            captureBeyondViewport: false
-        });
-        const screenshot = Buffer.from(capture.data, "base64");
+        let screenshot = overlayScreenshot;
+        if (!screenshot) {
+            const capture = await client.send("Page.captureScreenshot", {
+                format: "png",
+                captureBeyondViewport: false
+            });
+            screenshot = Buffer.from(capture.data, "base64");
+        }
         const dimensions = pngDimensions(screenshot);
         if (dimensions.width !== WIDTH || dimensions.height !== HEIGHT) {
             throw new Error("unexpected screenshot size " + dimensions.width + "x" + dimensions.height);
@@ -622,6 +726,8 @@ async function main() {
             screenshotDimensions: dimensions,
             initialState,
             finalState,
+            overlayApplication,
+            overlayStatus,
             backendProvenance: proxyHealth
         }, null, 2));
     } finally {

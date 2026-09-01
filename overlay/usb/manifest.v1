@@ -1,5 +1,5 @@
 manifest_version|1
-overlay_id|diagnostic-boot-recovery-v3
+overlay_id|developer-diagnostics-example-v4
 firmware_file|/jci/version.ini
 firmware_sha256|510229e20edcd61412280250bf00794851de968c5919272a594d299b3adb819b
 firmware_version|MAZ_CMU-150_74.00.324
@@ -10,3 +10,6 @@ file|/jci/scripts/stage_1.sh|2ec71fc955d0107a6e90d1ab4e6f00c9438b56d3e621ef018d5
 file|/jci/scripts/stage_3.sh|a8076d3d28d21e02012b20eaf7dbf75409a6277134439025f282e368e3305abf|payloads/boot/stage_3.sh|b1f56369dfd58820f4e6f62909b1cffa92ad9abdad59ed3db39d76cae5674b51|0755|sh
 file|/jci/scripts/cmu-overlay-diagnostic.sh|absent|payloads/diagnostic/cmu-overlay-diagnostic.sh|2ef9eb1303b949f1c33ab3928076599ec173040b7e132307682c160a8b6653f7|0755|sh
 file|/jci/scripts/cmu-overlay-diagnostic.conf|absent|payloads/diagnostic/cmu-overlay-diagnostic.conf|72a381200950a3fb23f32c43d48f1305152b3c64ace9515f8fc5174152a01979|0644|data
+file|/data/integration/developer_mode_GuiConfig.js|absent|payloads/developer-app/developer_mode_GuiConfig.js|7133f71a0cc210013524b31eb7d26c2fff9fd334eaa0339210949dd414411592|0644|js
+file|/jci/gui/apps/system/js/developerdiagnosticsApp.js|absent|payloads/developer-app/developerdiagnosticsApp.js|4b797558beba845bdfce07eae1f4179ba00245fb1e1327a3c5e62ee072cd3688|0644|js
+file|/jci/gui/apps/system/css/developerdiagnosticsApp.css|absent|payloads/developer-app/developerdiagnosticsApp.css|3fc7206c204f0074f67fe54ddfb75938443b49d22eea5e2263f22b650222ba1b|0644|data

@@ -47,6 +47,9 @@ class OverlayReplica:
         self.guard = self.base / "guard"
         shutil.copytree(SOURCE_USB, self.usb)
         (self.root / "jci/scripts").mkdir(parents=True)
+        (self.root / "data/integration").mkdir(parents=True)
+        (self.root / "jci/gui/apps/system/js").mkdir(parents=True)
+        (self.root / "jci/gui/apps/system/css").mkdir(parents=True)
         for path, content in zip(self.stage_targets, (STOCK_STAGE_1, STOCK_STAGE_3)):
             path.write_text(content, encoding="ascii")
             path.chmod(0o775)
@@ -162,11 +165,14 @@ class OverlayReplica:
         return key_file
 
     @property
-    def targets(self) -> tuple[Path, Path]:
+    def targets(self) -> tuple[Path, ...]:
         scripts = self.root / "jci/scripts"
         return (
             scripts / "cmu-overlay-diagnostic.sh",
             scripts / "cmu-overlay-diagnostic.conf",
+            self.root / "data/integration/developer_mode_GuiConfig.js",
+            self.root / "jci/gui/apps/system/js/developerdiagnosticsApp.js",
+            self.root / "jci/gui/apps/system/css/developerdiagnosticsApp.css",
         )
 
     @property
@@ -280,7 +286,7 @@ class OverlayManagerTests(unittest.TestCase):
         self.assertTrue(all(not target.exists() for target in self.replica.targets))
 
     def test_install_rejects_partial_known_state(self) -> None:
-        first, second = self.replica.targets
+        first, second = self.replica.targets[:2]
         shutil.copy2(
             self.replica.usb / "payloads/diagnostic/cmu-overlay-diagnostic.sh",
             first,
@@ -441,7 +447,7 @@ class OverlayManagerTests(unittest.TestCase):
         key_file = self.replica.add_nvram_entry(
             "diagnostic_overlay_state", "factory", "enabled"
         )
-        crashed = self.replica.run("install", crash_point="mutation:6")
+        crashed = self.replica.run("install", crash_point="mutation:9")
         self.assertEqual(crashed.returncode, 99, crashed.stdout + crashed.stderr)
         self.assertEqual(key_file.read_text(), "enabled\n")
 

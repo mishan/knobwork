@@ -20,7 +20,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_WORKSPACE = REPO_ROOT / "scratch" / "overlay-workspace"
 DEFAULT_BUNDLE = REPO_ROOT / "overlay" / "usb"
 WORKSPACE_METADATA = ".overlay-workspace.json"
-WORKSPACE_FORMAT = 1
+WORKSPACE_FORMAT = 2
 WORKSPACE_KIND = "mazda-cmu-overlay-workspace"
 MANAGER_ACTIONS = {
     "install",
@@ -229,6 +229,12 @@ def _validate_stock_root(
             f"Selected root does not match the pinned firmware: {firmware_file}"
         )
     for _, target, stock_hash, _, _, _, _ in files:
+        if target.startswith("/data/"):
+            if stock_hash != "absent":
+                raise OverlayWorkflowError(
+                    "Firmware workspaces support only absent-state /data targets"
+                )
+            continue
         live = _safe_root_target(root, target)
         if stock_hash == "absent":
             if _lexists(live):
@@ -285,6 +291,10 @@ class OverlayWorkspace:
     metadata: dict[str, object]
 
     @property
+    def data_volume(self) -> Path:
+        return self.path / "data"
+
+    @property
     def mount_state(self) -> Path:
         return self.emulated / "mount-state"
 
@@ -322,12 +332,20 @@ def load_workspace(workspace: str | Path) -> OverlayWorkspace:
         path=path,
         root=path / "root",
         bundle=path / "usb",
-        data=path / "data",
+        data=path / "data" / "cmu-overlay",
         emulated=path / "emulated",
         metadata=metadata,
     )
-    required = (result.root / "jci/version.ini", result.bundle / "manifest.v1")
-    if not all(item.is_file() for item in required):
+    required_files = (
+        result.root / "jci/version.ini",
+        result.bundle / "manifest.v1",
+    )
+    if (
+        not all(item.is_file() for item in required_files)
+        or not (result.data_volume / "integration").is_dir()
+        or not (result.root / "data").is_symlink()
+        or os.readlink(result.root / "data") != "../data"
+    ):
         raise OverlayWorkflowError(f"Incomplete overlay workspace: {path}")
     return result
 
@@ -350,9 +368,27 @@ def initialize_workspace(
     try:
         _copy_root(source, staging / "root")
         shutil.copytree(bundle_path, staging / "usb", symlinks=False)
-        data = staging / "data"
+        data_volume = staging / "data"
         emulated = staging / "emulated"
+        data_volume.mkdir()
+        (data_volume / "integration").mkdir()
+        data = data_volume / "cmu-overlay"
         data.mkdir()
+        root_data = staging / "root" / "data"
+        if root_data.is_symlink():
+            root_data.unlink()
+        elif root_data.is_dir():
+            try:
+                root_data.rmdir()
+            except OSError as error:
+                raise OverlayWorkflowError(
+                    "The source root has a non-empty /data directory; expected a mount-point symlink"
+                ) from error
+        elif root_data.exists():
+            raise OverlayWorkflowError(
+                "The source root has an unexpected non-directory /data entry"
+            )
+        root_data.symlink_to("../data", target_is_directory=True)
         emulated.mkdir()
         (emulated / "mount-state").write_text("ro\n", encoding="ascii")
         (emulated / "watchdog").write_text("0\n", encoding="ascii")

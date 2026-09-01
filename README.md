@@ -78,6 +78,15 @@ The source firmware remains untouched. The default action shell is the stock
 ARM BusyBox `ash` under `qemu-arm`. Lifecycle, boot-health, failure injection,
 and interrupted-transaction recovery examples are in the
 [overlay developer workflow](overlay/README.md#developer-emulator-workflow).
+The installed proof-of-concept appears as **Developer Diagnostics** under the
+stock Applications menu. It shows manager state/logs and observed shared,
+MMUI, AppSDK, and DBAPI inputs. Run it and its dedicated UI gate with:
+
+```sh
+python3 emulate.py ui --root scratch/overlay-workspace/root
+python3 emulate.py verify-ui --expect-overlay-app \
+  --screenshot /tmp/mazda-overlay-diagnostics.png
+```
 
 The UI server and its regression run as separate commands:
 

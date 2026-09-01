@@ -49,7 +49,8 @@ class OverlayWorkflowTests(unittest.TestCase):
         self.workspace = self.base / "workspace"
         scripts = self.source / "jci" / "scripts"
         scripts.mkdir(parents=True)
-        (self.source / "jci" / "gui").mkdir()
+        (self.source / "jci/gui/apps/system/js").mkdir(parents=True)
+        (self.source / "jci/gui/apps/system/css").mkdir(parents=True)
         (self.source / "jci" / "mmui").mkdir()
         (self.source / "jci" / "version.ini").write_text(
             VERSION_TEXT, encoding="ascii"
@@ -108,6 +109,8 @@ class OverlayWorkflowTests(unittest.TestCase):
             str(self.workspace),
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue((self.workspace / "root/data").is_symlink())
+        self.assertEqual((self.workspace / "root/data").readlink(), Path("../data"))
 
         result = self.run_cli(
             "install",
@@ -125,6 +128,15 @@ class OverlayWorkflowTests(unittest.TestCase):
         status = json.loads(result.stdout)
         self.assertEqual(status["manager_state"], "enabled")
         self.assertEqual({item["state"] for item in status["targets"]}, {"payload"})
+        self.assertTrue(
+            (self.workspace / "data/integration/developer_mode_GuiConfig.js").is_file()
+        )
+        self.assertTrue(
+            (
+                self.workspace
+                / "root/jci/gui/apps/system/js/developerdiagnosticsApp.js"
+            ).is_file()
+        )
 
         result = self.run_cli(
             "verify",
@@ -136,10 +148,37 @@ class OverlayWorkflowTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+        result = self.run_cli(
+            "disable",
+            "--runtime",
+            "--shell",
+            "host",
+            "--workspace",
+            str(self.workspace),
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(
+            (self.workspace / "data/integration/developer_mode_GuiConfig.js").exists()
+        )
+        self.assertFalse(
+            (
+                self.workspace
+                / "root/jci/gui/apps/system/js/developerdiagnosticsApp.js"
+            ).exists()
+        )
+
         for name, expected_hash in source_stage_hashes.items():
             self.assertEqual(sha256(self.source / "jci/scripts" / name), expected_hash)
         self.assertFalse(
             (self.source / "jci/scripts/cmu-overlay-boot-hook.sh").exists()
+        )
+        self.assertFalse(
+            (self.source / "data/integration/developer_mode_GuiConfig.js").exists()
+        )
+        self.assertFalse(
+            (
+                self.source / "jci/gui/apps/system/js/developerdiagnosticsApp.js"
+            ).exists()
         )
 
         result = self.run_cli("reset", "--workspace", str(self.workspace))

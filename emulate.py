@@ -93,6 +93,8 @@ def cmd_verify_ui(args):
     env["EMU_EXPECT_MODE"] = args.expect_mode
     if args.screenshot:
         env["EMU_SCREENSHOT"] = args.screenshot
+    if args.expect_overlay_app:
+        env["EMU_EXPECT_OVERLAY_APP"] = "true"
     return subprocess.run(["node", verifier], env=env).returncode
 
 def cmd_build_guest(args):
@@ -246,6 +248,11 @@ def main():
         help="Require an explicit mock or native QEMU proxy backend",
     )
     p_verify.add_argument("--screenshot", help="Optional PNG output path")
+    p_verify.add_argument(
+        "--expect-overlay-app",
+        action="store_true",
+        help="Navigate to and validate the installed Developer Diagnostics example",
+    )
     p_verify.set_defaults(func=cmd_verify_ui)
 
     # fetch-kernel

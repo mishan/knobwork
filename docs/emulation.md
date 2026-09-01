@@ -67,7 +67,11 @@ four stages:
   transaction manager through `qemu-arm` and stock ARM BusyBox `ash`. The
   persistent workspace exposes install/repair/disable/restore, boot-health,
   handled-failure, and abrupt-process-loss recovery paths without touching the
-  source firmware. See [`overlay/README.md`](../overlay/README.md#developer-emulator-workflow).
+  source firmware. The installed Developer Diagnostics example is reachable
+  from the stock Applications screen; `verify-ui --expect-overlay-app` drives
+  it and validates manager logs, observed GUI input capture, navigation, and a
+  clean browser runtime. See
+  [`overlay/README.md`](../overlay/README.md#developer-emulator-workflow).
 
 ## Existing `mazda_emulation` repository
 

@@ -1,9 +1,10 @@
 # Reversible overlay manager
 
 This is the phase-2 USB transaction manager from
-[`docs/roadmap.md`](../docs/roadmap.md). The pinned bundle installs two inert
-diagnostic files and a minimal boot-health bridge under `/jci/scripts`. It does
-not patch the HMI framework, NVRAM, or native binaries.
+[`docs/roadmap.md`](../docs/roadmap.md). The pinned bundle installs diagnostic
+scripts, a minimal boot-health bridge, and a Developer Diagnostics proof-of-
+concept under the stock CMU Applications menu. It does not replace stock HMI
+framework files, change NVRAM, or patch native binaries.
 
 ## Safety contract
 
@@ -59,14 +60,38 @@ orders the helper before `stage_1.sh`, so the persisted runtime can recover an
 interrupted transaction as soon as the boot stage itself becomes active.
 
 This is a native-service readiness signal, not proof that Opera or HomeScreen
-JavaScript initialized successfully. A future HMI framework overlay must move
-the success acknowledgement to a reviewed browser/UI readiness point before it
-can rely on this counter for JavaScript bootloop recovery.
+JavaScript initialized successfully. The example application deliberately does
+not change that acknowledgement. A production HMI overlay must move success to
+a reviewed browser/UI readiness point before relying on this counter for
+JavaScript bootloop recovery.
 
 JavaScript entries use the manifest type `js`. They are rejected unless a
 working syntax checker is available through `MZD_OVERLAY_JS_CHECKER`, `node`,
 or `/data/cmu-overlay/bin/js-check`. The manager checks the USB payload during
 preflight and the same-filesystem staged copy immediately before rename.
+
+## Developer Diagnostics example
+
+The example uses the existing `/data/integration/developer_mode_GuiConfig.js`
+hook to register `Developer Diagnostics` under **Applications** without editing
+stock `systemApp.js` or framework files. Its JavaScript and CSS live in the
+existing `apps/system` directories so installation never has to create a new
+root-filesystem directory. Disable, restore, safe mode, and transaction rollback
+remove all three files and put the exact stock absent state back.
+
+The app displays manager state, active transaction, boot counter, emulated mount
+and watchdog state, backend and socket health, loaded UI applications, recent
+manager journal entries, and a **Vehicle Inputs** section. The input section
+records shared framework data and keeps the latest 80 messages per incoming
+MMUI, AppSDK, and DBAPI channel. The UI shows shared values and the latest 12
+messages from each channel; the complete bounded capture is available to browser
+developer tools as `window.__developerDiagnosticsInputs`.
+
+Steering angle is detected by field name anywhere in observed input. The stock
+v74 application JavaScript does not name or consume a steering-angle signal
+(`SteeringWheelLoc` is left/right-hand-drive configuration, not an angle), so
+the app reports `not exposed or observed` until such a field actually reaches
+the GUI. This distinguishes a missing GUI surface from a synthetic value.
 
 ## Prepare media
 
@@ -153,10 +178,26 @@ python3 emulate.py ui --root scratch/overlay-workspace/root
 python3 emulate.py build-guest --root scratch/overlay-workspace/root
 ```
 
-The current diagnostic overlay has no browser-visible UI, so those commands
-are integration entry points for later overlays rather than a visual demo.
-Status is also available as machine-readable JSON with `--json`. When the
-experiment is finished, remove only the validated disposable workspace:
+To try the installed example, leave the UI command running in one terminal:
+
+```sh
+python3 emulate.py ui --root scratch/overlay-workspace/root
+```
+
+Open `http://127.0.0.1:8080/`, choose **Applications**, then
+**Developer Diagnostics**. A second terminal can run the automated commander,
+render, diagnostics, input-capture, back-navigation, and runtime-error gate:
+
+```sh
+python3 emulate.py verify-ui --expect-overlay-app \
+  --screenshot /tmp/mazda-overlay-diagnostics.png
+```
+
+The harness serves manager state through `/__emu/overlay` only when its root is
+inside a validated overlay workspace. A normal stock root continues to receive
+the empty developer-mode hook. Status is also available as machine-readable
+JSON with `--json`. When the experiment is finished, remove only the validated
+disposable workspace:
 
 ```sh
 python3 emulate.py overlay reset
@@ -181,5 +222,8 @@ runtime corruption, transactional NVRAM, simulated process loss during file,
 NVRAM, metadata, commit, and rollback boundaries, corrupted recovery records,
 incomplete backup pairs, the no-argument dialog path, and JavaScript preflight
 before remount. The emulator-workflow suite additionally exercises the public
-CLI, source-tree preservation, persisted-runtime execution, guarded cleanup,
-and restart recovery after an injected process loss.
+CLI, source-tree preservation, `/data` mount modeling, application payload
+installation/removal, persisted-runtime execution, guarded cleanup, and restart
+recovery after an injected process loss. `verify-ui --expect-overlay-app` then
+drives the visible application in the stock 800x480 HMI and fails on browser
+syntax or runtime errors.

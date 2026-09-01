@@ -746,7 +746,12 @@ overlay_replace_with_file() {
     overlay_type=$5
     overlay_live=$(overlay_target_path "$overlay_target")
     overlay_parent=$(dirname "$overlay_live")
-    overlay_stage="$overlay_parent/.cmu-overlay.$$.stage.$((OVERLAY_ROLLBACK_COUNT + 1))"
+    case "$overlay_type" in
+        js) overlay_stage_suffix=.js ;;
+        sh) overlay_stage_suffix=.sh ;;
+        *) overlay_stage_suffix= ;;
+    esac
+    overlay_stage="$overlay_parent/.cmu-overlay.$$.stage.$((OVERLAY_ROLLBACK_COUNT + 1))$overlay_stage_suffix"
     cp -p "$overlay_source" "$overlay_stage" || return 1
     [ "$overlay_mode" = preserve ] || chmod "$overlay_mode" "$overlay_stage" || return 1
     [ "$(overlay_sha256 "$overlay_stage")" = "$overlay_expected" ] || return 1
