@@ -222,6 +222,36 @@ developerdiagnosticsApp.prototype._appendCanRows = function (items)
     ));
 };
 
+developerdiagnosticsApp.prototype._appendScriptLoaderRows = function (items)
+{
+    var diagnostics = window.__cmuScriptLoaderDiagnostics || {
+        records: [], failures: [], maxRecords: 0
+    };
+    var records = diagnostics.records || [];
+    var failures = diagnostics.failures || [];
+    items.push(this._headingRow("Script Loader"));
+    items.push(this._statusRow(
+        "Load outcomes",
+        records.length + " retained / " + failures.length + " failed"
+    ));
+    if (failures.length === 0) {
+        items.push(this._statusRow("Latest failure", "none observed"));
+    } else {
+        var first = Math.max(0, failures.length - 6);
+        for (var index = first; index < failures.length; index += 1) {
+            var failure = failures[index];
+            items.push(this._statusRow(
+                failure.classification + " script",
+                failure.url + " / " + failure.elapsedMs + "ms"
+            ));
+        }
+    }
+    items.push(this._statusRow(
+        "Full loader trace",
+        "window.__cmuScriptLoaderDiagnostics (" + diagnostics.maxRecords + " max)"
+    ));
+};
+
 developerdiagnosticsApp.prototype._buildDataList = function ()
 {
     var overlay = this._overlayStatus || {};
@@ -249,6 +279,7 @@ developerdiagnosticsApp.prototype._buildDataList = function ()
         )
     ];
 
+    this._appendScriptLoaderRows(items);
     this._appendVehicleInputRows(items);
     this._appendCanRows(items);
 

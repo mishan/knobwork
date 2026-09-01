@@ -170,6 +170,20 @@ python3 emulate.py verify-ui --expect-overlay-app \
   --screenshot /tmp/mazda-overlay-diagnostics.png
 ```
 
+To exercise Phase 3 optional-script recovery without deleting or corrupting an
+installed file, restart the harness with its narrowly scoped fault switch:
+
+```sh
+python3 emulate.py ui --root scratch/overlay-workspace/root \
+  --fail-overlay-app-script
+
+python3 emulate.py verify-ui --expect-overlay-app-fallback
+```
+
+This deliberately fails only `developerdiagnosticsApp.js`. The verifier proves
+that the load is reported once, the unusable entry is removed, no partial app or
+queued retry remains, and the stock UI returns from Applications to HomeScreen.
+
 To test the CAN diagnostics surface without hardware, add the strict synthetic
 replay fixture when starting the UI, then require it in verification:
 

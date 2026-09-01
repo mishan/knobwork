@@ -61,6 +61,15 @@ Start with a harmless diagnostic overlay before any framework modification.
 
 ## Phase 3: runtime and UI improvements
 
+**Status:** diagnostics/trace surfaces and the first script-loader resilience
+increment are implemented as reversible overlay behavior. The loader records
+bounded structured outcomes and immediately recovers from a missing optional
+Developer Diagnostics script; an emulator fault test verifies a single failed
+request, removal of the unusable entry, an empty message queue, and return to
+the stock Applications context. Required stock script behavior is unchanged,
+and no speculative load timeout has been introduced. WebSocket state-machine
+work remains next.
+
 Suggested order:
 
 1. diagnostics and trace correlation;

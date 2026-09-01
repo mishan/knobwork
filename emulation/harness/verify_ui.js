@@ -57,6 +57,7 @@ const CHROME = resolveChromePath();
 const SCREENSHOT = process.env.EMU_SCREENSHOT || "";
 const EXPECTED_MODE = process.env.EMU_EXPECT_MODE || "mock";
 const EXPECT_OVERLAY_APP = process.env.EMU_EXPECT_OVERLAY_APP === "true";
+const EXPECT_OVERLAY_APP_FALLBACK = process.env.EMU_EXPECT_OVERLAY_APP_FALLBACK === "true";
 const EXPECT_CAN_REPLAY = process.env.EMU_EXPECT_CAN_REPLAY === "true";
 const REQUIRE_QUEUED_STARTUP = process.env.EMU_REQUIRE_QUEUED_STARTUP === "true";
 const WIDTH = 800;
@@ -406,7 +407,8 @@ async function main() {
         if (!["mock", "proxy"].includes(EXPECTED_MODE)) {
             throw new Error("EMU_EXPECT_MODE must be mock or proxy");
         }
-        if (EXPECT_OVERLAY_APP && EXPECTED_MODE !== "mock") {
+        if ((EXPECT_OVERLAY_APP || EXPECT_OVERLAY_APP_FALLBACK)
+                && EXPECTED_MODE !== "mock") {
             throw new Error("the overlay example verification requires mock mode");
         }
         if (EXPECT_CAN_REPLAY && !EXPECT_OVERLAY_APP) {
@@ -422,7 +424,7 @@ async function main() {
             );
         }
         let overlayStatus = null;
-        if (EXPECT_OVERLAY_APP) {
+        if (EXPECT_OVERLAY_APP || EXPECT_OVERLAY_APP_FALLBACK) {
             if (!startupHealth.overlayWorkspace) {
                 throw new Error("harness is not serving a validated overlay workspace");
             }
@@ -602,7 +604,7 @@ async function main() {
         await delay(1200);
         let overlayScreenshot = null;
         let overlayApplication = null;
-        if (EXPECT_OVERLAY_APP) {
+        if (EXPECT_OVERLAY_APP || EXPECT_OVERLAY_APP_FALLBACK) {
             await waitForExpression(
                 client,
                 "window.__developerDiagnosticsIntegration && "
@@ -640,59 +642,107 @@ async function main() {
                 );
             }
             await pressKey(client, "Enter", "Enter", 13);
-            await waitForExpression(
-                client,
-                'framework.getCurrCtxtId() === "DeveloperDiagnostics" && '
-                    + 'framework.getCurrentApp() === "developerdiagnostics" && '
-                    + 'document.body.innerText.includes("Overlay manager")',
-                "the Developer Diagnostics application",
-                15000
-            );
-            await waitForExpression(
-                client,
-                'document.body.innerText.includes("enabled")',
-                "the enabled overlay state in Developer Diagnostics"
-            );
-            const inputDiagnostics = await evaluate(client, "(function () {" +
-                "var app = framework._appInstances.developerdiagnostics;" +
+            if (EXPECT_OVERLAY_APP_FALLBACK) {
+                await waitForExpression(
+                    client,
+                    'window.__developerDiagnosticsIntegration && '
+                        + 'window.__developerDiagnosticsIntegration.installed === false && '
+                        + 'framework._frameworkState === framework._FWK_STATE_IDLE && '
+                        + 'framework.getCurrCtxtId() === "Applications" && '
+                        + 'window.__cmuScriptLoaderDiagnostics.failures.some(function (item) {'
+                        + 'return item.url === "apps/system/js/developerdiagnosticsApp.js" && '
+                        + 'item.classification === "optional";})',
+                    "optional app script failure recovery",
+                    15000
+                );
+                overlayApplication.fallback = await evaluate(client, "(function () {" +
+                    "var system = framework._appInstances.system;" +
+                    "var remaining = system._masterApplicationDataList.items.filter(function (item) {" +
+                        "return item.appData && item.appData.appName === 'developerdiagnostics';" +
+                    "}).length;" +
+                    "return {" +
+                        "integration:window.__developerDiagnosticsIntegration," +
+                        "scriptDiagnostics:window.__cmuScriptLoaderDiagnostics," +
+                        "remainingEntries:remaining," +
+                        "appLoaded:Boolean(framework._appInstances.developerdiagnostics)," +
+                        "frameworkState:framework._frameworkState," +
+                        "queueLength:framework._msgQueue.length" +
+                    "};" +
+                "}())");
+                if (overlayApplication.fallback.remainingEntries !== 0
+                        || overlayApplication.fallback.appLoaded
+                        || overlayApplication.fallback.queueLength !== 0) {
+                    throw new Error(
+                        "optional app fallback left unsafe state: "
+                        + JSON.stringify(overlayApplication.fallback)
+                    );
+                }
+                const faultHealth = await getJson(new URL("/__emu/health", TARGET_URL));
+                const fault = faultHealth.stats.httpCompatibility
+                    .injectedFailures.overlayAppScript;
+                if (!fault.enabled || fault.requests !== 1) {
+                    throw new Error(
+                        "overlay script fault was not injected exactly once: "
+                        + JSON.stringify(fault)
+                    );
+                }
+            } else {
+                await waitForExpression(
+                    client,
+                    'framework.getCurrCtxtId() === "DeveloperDiagnostics" && '
+                        + 'framework.getCurrentApp() === "developerdiagnostics" && '
+                        + 'document.body.innerText.includes("Overlay manager")',
+                    "the Developer Diagnostics application",
+                    15000
+                );
+                await waitForExpression(
+                    client,
+                    'document.body.innerText.includes("enabled")',
+                    "the enabled overlay state in Developer Diagnostics"
+                );
+                const inputDiagnostics = await evaluate(client, "(function () {" +
+                    "var app = framework._appInstances.developerdiagnostics;" +
                 "var labels = app._dataList.items.map(function (item) { return item.text1; });" +
                 "return {" +
+                    "hasScriptLoader:labels.indexOf('Script Loader') >= 0," +
                     "hasVehicleInputs:labels.indexOf('Vehicle Inputs (observed by GUI)') >= 0," +
-                    "hasSteeringAngle:labels.indexOf('Steering angle') >= 0," +
-                    "hasGatewayCan:labels.indexOf('Gateway CAN (receive-only)') >= 0," +
-                    "capturedMmui:window.__developerDiagnosticsInputs.mmui.length," +
-                    "capturedCan:window.__developerDiagnosticsInputs.can.length" +
-                "};" +
-            "}())");
-            if (!inputDiagnostics.hasVehicleInputs
-                    || !inputDiagnostics.hasSteeringAngle
-                    || !inputDiagnostics.hasGatewayCan
-                    || inputDiagnostics.capturedMmui < 1) {
-                throw new Error(
-                    "vehicle input diagnostics are incomplete: "
-                    + JSON.stringify(inputDiagnostics)
+                        "hasSteeringAngle:labels.indexOf('Steering angle') >= 0," +
+                        "hasGatewayCan:labels.indexOf('Gateway CAN (receive-only)') >= 0," +
+                        "capturedMmui:window.__developerDiagnosticsInputs.mmui.length," +
+                        "capturedCan:window.__developerDiagnosticsInputs.can.length" +
+                    "};" +
+                "}())");
+                if (!inputDiagnostics.hasScriptLoader
+                        || !inputDiagnostics.hasVehicleInputs
+                        || !inputDiagnostics.hasSteeringAngle
+                        || !inputDiagnostics.hasGatewayCan
+                        || inputDiagnostics.capturedMmui < 1) {
+                    throw new Error(
+                        "vehicle input diagnostics are incomplete: "
+                        + JSON.stringify(inputDiagnostics)
+                    );
+                }
+                if (EXPECT_CAN_REPLAY && inputDiagnostics.capturedCan < 1) {
+                    throw new Error(
+                        "CAN replay did not reach Developer Diagnostics: "
+                        + JSON.stringify(inputDiagnostics)
+                    );
+                }
+                overlayApplication.inputDiagnostics = inputDiagnostics;
+                await delay(500);
+                const overlayCapture = await client.send("Page.captureScreenshot", {
+                    format: "png",
+                    captureBeyondViewport: false
+                });
+                overlayScreenshot = Buffer.from(overlayCapture.data, "base64");
+                await pressKey(client, "Backspace", "Backspace", 8);
+                await waitForExpression(
+                    client,
+                    'framework.getCurrCtxtId() === "Applications"',
+                    "return from Developer Diagnostics to Applications"
                 );
+                await delay(1200);
             }
-            if (EXPECT_CAN_REPLAY && inputDiagnostics.capturedCan < 1) {
-                throw new Error(
-                    "CAN replay did not reach Developer Diagnostics: "
-                    + JSON.stringify(inputDiagnostics)
-                );
-            }
-            overlayApplication.inputDiagnostics = inputDiagnostics;
-            await delay(500);
-            const overlayCapture = await client.send("Page.captureScreenshot", {
-                format: "png",
-                captureBeyondViewport: false
-            });
-            overlayScreenshot = Buffer.from(overlayCapture.data, "base64");
-            await pressKey(client, "Backspace", "Backspace", 8);
-            await waitForExpression(
-                client,
-                'framework.getCurrCtxtId() === "Applications"',
-                "return from Developer Diagnostics to Applications"
-            );
-            await delay(1200);
         }
         await pressKey(client, "Backspace", "Backspace", 8);
         await waitForExpression(
@@ -732,10 +782,17 @@ async function main() {
             }
             return event.method === "Runtime.consoleAPICalled" && event.params.type === "error";
         });
-        if (errors.length) {
+        const unexpectedErrors = EXPECT_OVERLAY_APP_FALLBACK
+            ? errors.filter((event) => {
+                const serialized = JSON.stringify(event);
+                return !serialized.includes("developerdiagnosticsApp.js")
+                    && !serialized.includes("Script load failed");
+            })
+            : errors;
+        if (unexpectedErrors.length) {
             throw new Error(
-                "browser reported " + errors.length + " runtime error(s): "
-                + JSON.stringify(errors.slice(0, 10))
+                "browser reported " + unexpectedErrors.length + " runtime error(s): "
+                + JSON.stringify(unexpectedErrors.slice(0, 10))
             );
         }
 

@@ -84,9 +84,19 @@ existing `apps/system` directories so installation never has to create a new
 root-filesystem directory. Disable, restore, safe mode, and transaction rollback
 remove all three files and put the exact stock absent state back.
 
+The integration also wraps the stock script loader at runtime without replacing
+`Utility.js`. It preserves the normal success path and keeps the latest 80 load
+records in `window.__cmuScriptLoaderDiagnostics`. The example app is marked
+optional: an immediate script error records the URL, classification, and elapsed
+time, removes the now-unusable menu entry, drops only queued messages for that
+app, and returns to **Applications** with the framework idle. Required stock
+scripts retain the factory timeout/restart behavior. No new timeout is imposed
+until real-CMU load times have been measured.
+
 The app displays manager state, active transaction, boot counter, emulated mount
 and watchdog state, backend and socket health, loaded UI applications, recent
-manager journal entries, and a **Vehicle Inputs** section. The input section
+manager journal entries, a bounded **Script Loader** trace, and a **Vehicle
+Inputs** section. The input section
 records shared framework data and keeps the latest 80 messages per incoming
 MMUI, AppSDK, and DBAPI channel. The UI shows shared values and the latest 12
 messages from each channel; the complete bounded capture is available to browser
@@ -213,6 +223,22 @@ python3 emulate.py verify-ui --expect-overlay-app \
   --screenshot /tmp/mazda-overlay-diagnostics.png
 ```
 
+The safe fallback has a deterministic emulator drill. Start a fresh harness
+that returns an injected error only for the optional application script, then
+run the matching verifier from another terminal:
+
+```sh
+python3 emulate.py ui --root scratch/overlay-workspace/root \
+  --fail-overlay-app-script
+
+python3 emulate.py verify-ui --expect-overlay-app-fallback
+```
+
+The verifier requires exactly one injected request, a structured optional-load
+failure, no partial app instance or retry loop, removal of the broken entry, an
+empty framework queue, and successful navigation back to HomeScreen. The fault
+switch is emulator-only and is never included in the USB payload.
+
 To exercise the receive-only gateway-data surface with the synthetic replay
 fixture:
 
@@ -259,4 +285,5 @@ CLI, source-tree preservation, `/data` mount modeling, application payload
 installation/removal, persisted-runtime execution, guarded cleanup, and restart
 recovery after an injected process loss. `verify-ui --expect-overlay-app` then
 drives the visible application in the stock 800x480 HMI and fails on browser
-syntax or runtime errors.
+syntax or runtime errors. The `--expect-overlay-app-fallback` variant verifies
+immediate recovery from a missing optional application script.

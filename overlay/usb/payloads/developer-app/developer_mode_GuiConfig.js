@@ -8,6 +8,14 @@
     var attempts = 0;
     var contextSequence = 200;
     var inputCaptureLimit = 80;
+    var scriptRecordLimit = 80;
+
+    window.__cmuScriptLoaderDiagnostics = {
+        schema: "mazda-cmu-script-loader-v1",
+        maxRecords: scriptRecordLimit,
+        records: [],
+        failures: []
+    };
 
     window.__developerDiagnosticsInputs = {
         maxPerChannel: inputCaptureLimit,
@@ -35,6 +43,109 @@
         if (inputs[channel].length > inputCaptureLimit) {
             inputs[channel].shift();
         }
+    }
+
+    function recordScriptLoad(record) {
+        var diagnostics = window.__cmuScriptLoaderDiagnostics;
+        diagnostics.records.push(record);
+        if (diagnostics.records.length > scriptRecordLimit) {
+            diagnostics.records.shift();
+        }
+        if (record.status === "failed") {
+            diagnostics.failures.push(record);
+            if (diagnostics.failures.length > scriptRecordLimit) {
+                diagnostics.failures.shift();
+            }
+        }
+    }
+
+    function reportScriptFailure(record) {
+        if (window.log && typeof log.error === "function") {
+            log.error(
+                "Script load failed: " + record.url
+                + " classification=" + record.classification
+                + " elapsed=" + record.elapsedMs + "ms"
+            );
+        }
+    }
+
+    function installScriptLoaderDiagnostics() {
+        if (!window.Utility || !Utility.prototype || !window.utility) {
+            return false;
+        }
+        if (Utility.prototype.__cmuScriptLoaderDiagnosticsInstalled) {
+            return true;
+        }
+
+        var originalLoadScript = Utility.prototype.loadScript;
+        Utility.prototype.loadScript = function (url, attributes, callback) {
+            var startedAt = Date.now();
+            var finished = false;
+            var cleanAttributes = {};
+            var optional = attributes && attributes.cmuOptional === true;
+            var failureCallback = attributes && attributes.cmuFailureCallback;
+            var originalError = attributes && attributes.onerror;
+
+            if (attributes) {
+                for (var key in attributes) {
+                    if (key !== "cmuOptional" && key !== "cmuFailureCallback") {
+                        cleanAttributes[key] = attributes[key];
+                    }
+                }
+            }
+
+            function finish(status, detail) {
+                if (finished) {
+                    return;
+                }
+                finished = true;
+                var record = {
+                    url: String(url),
+                    classification: optional ? "optional" : "required",
+                    startedAt: new Date(startedAt).toISOString(),
+                    elapsedMs: Date.now() - startedAt,
+                    status: status,
+                    detail: detail || null
+                };
+                recordScriptLoad(record);
+                if (status === "failed") {
+                    reportScriptFailure(record);
+                    if (typeof failureCallback === "function") {
+                        try {
+                            failureCallback(record);
+                        } catch (error) {
+                            if (window.log && typeof log.error === "function") {
+                                log.error("Optional script fallback failed: " + String(error));
+                            }
+                        }
+                    }
+                }
+            }
+
+            cleanAttributes.onerror = function () {
+                finish("failed", "script element emitted an error event");
+                if (typeof originalError === "function") {
+                    originalError.apply(this, arguments);
+                }
+            };
+
+            try {
+                return originalLoadScript.call(this, url, cleanAttributes, function (args) {
+                    finish("loaded", null);
+                    if (callback != null) {
+                        callback(args);
+                    }
+                });
+            } catch (error) {
+                finish("failed", String(error));
+                if (!optional) {
+                    throw error;
+                }
+                return null;
+            }
+        };
+        Utility.prototype.__cmuScriptLoaderDiagnosticsInstalled = true;
+        return true;
     }
 
     function routeContext(uiaId, contextId) {
@@ -67,6 +178,71 @@
         }
     };
 
+    function messageTargetsDeveloperApp(entry) {
+        var message = entry && entry.msg;
+        if (!message) {
+            return false;
+        }
+        if (message.uiaId === APP_ID) {
+            return true;
+        }
+        if (message.appIdList) {
+            for (var index = 0; index < message.appIdList.length; index += 1) {
+                if (message.appIdList[index].id === APP_ID) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    function removeApplicationsEntry() {
+        if (!window.framework || !framework._appInstances) {
+            return;
+        }
+        var system = framework._appInstances.system;
+        if (!system || !system._masterApplicationDataList) {
+            return;
+        }
+        var items = system._masterApplicationDataList.items;
+        for (var index = items.length - 1; index >= 0; index -= 1) {
+            if (items[index].appData && items[index].appData.appName === APP_ID) {
+                items.splice(index, 1);
+            }
+        }
+        var names = system._applicationsCtxtWiseAppNames;
+        if (names && names.Applications) {
+            for (var nameIndex = names.Applications.length - 1; nameIndex >= 0; nameIndex -= 1) {
+                if (names.Applications[nameIndex] === APP_ID) {
+                    names.Applications.splice(nameIndex, 1);
+                }
+            }
+        }
+        if (system._currentContext && system._currentContext.ctxtId === "Applications") {
+            system._readyApplications();
+        }
+    }
+
+    function recoverDeveloperAppLoad(frameworkInstance, record) {
+        window.__developerDiagnosticsIntegration = {
+            installed: false,
+            appId: APP_ID,
+            contextId: APP_CONTEXT,
+            error: "Optional application script failed to load",
+            scriptFailure: record
+        };
+        removeApplicationsEntry();
+        frameworkInstance._msgQueue = frameworkInstance._msgQueue.filter(function (entry) {
+            return !messageTargetsDeveloperApp(entry);
+        });
+        frameworkInstance._loadingAppJsObj = null;
+        frameworkInstance._filesToLoad = {};
+        frameworkInstance._frameworkState = frameworkInstance._FWK_STATE_IDLE;
+        setTimeout(function () {
+            window.__developerDiagnosticsNavigate("applications");
+        }, 0);
+    }
+
     function installAppLoader() {
         if (!window.GuiFramework || !GuiFramework.prototype) {
             return false;
@@ -88,7 +264,13 @@
             this._filesToLoad = {};
             this._filesToLoad[appName] = false;
             utility.loadCss("apps/system/css/developerdiagnosticsApp.css");
-            utility.loadScript("apps/system/js/developerdiagnosticsApp.js");
+            var frameworkInstance = this;
+            utility.loadScript("apps/system/js/developerdiagnosticsApp.js", {
+                cmuOptional: true,
+                cmuFailureCallback: function (record) {
+                    recoverDeveloperAppLoad(frameworkInstance, record);
+                }
+            });
         };
         GuiFramework.prototype.__developerDiagnosticsLoaderInstalled = true;
         return true;
@@ -227,11 +409,12 @@
 
     function integrate() {
         attempts += 1;
+        var scriptLoaderReady = installScriptLoaderDiagnostics();
         var loaderReady = installAppLoader();
         var backReady = installBackNavigation();
         var inputMonitorReady = installInputMonitor();
         var entryReady = installApplicationsEntry();
-        if (loaderReady && backReady && inputMonitorReady && entryReady) {
+        if (scriptLoaderReady && loaderReady && backReady && inputMonitorReady && entryReady) {
             clearInterval(integrationTimer);
             integrationTimer = null;
             return;

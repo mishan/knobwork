@@ -70,6 +70,8 @@ def cmd_ui(args):
     env["ROOTFS_PATH"] = selected_rootfs(args)
     if args.proxy:
         env["PROXY_MODE"] = "true"
+    if args.fail_overlay_app_script:
+        env["EMU_FAIL_OVERLAY_APP_SCRIPT"] = "true"
     if args.can_replay:
         capture = load_can_capture(args.can_replay)
         env["CAN_REPLAY_PATH"] = capture["path"]
@@ -103,6 +105,8 @@ def cmd_verify_ui(args):
         env["EMU_SCREENSHOT"] = args.screenshot
     if args.expect_overlay_app:
         env["EMU_EXPECT_OVERLAY_APP"] = "true"
+    if args.expect_overlay_app_fallback:
+        env["EMU_EXPECT_OVERLAY_APP_FALLBACK"] = "true"
     if args.expect_can_replay:
         env["EMU_EXPECT_CAN_REPLAY"] = "true"
     return subprocess.run(["node", verifier], env=env).returncode
@@ -253,6 +257,11 @@ def main():
     add_firmware_input_arguments(p_ui)
     p_ui.add_argument("--proxy", action="store_true", help="Proxy WebSockets to QEMU guest")
     p_ui.add_argument(
+        "--fail-overlay-app-script",
+        action="store_true",
+        help="Test-only: return an error for the Developer Diagnostics app script",
+    )
+    p_ui.add_argument(
         "--can-replay",
         metavar="CAPTURE.jsonl",
         help="Validate and expose a receive-only VIM CAN capture to diagnostics",
@@ -274,10 +283,16 @@ def main():
         help="Require an explicit mock or native QEMU proxy backend",
     )
     p_verify.add_argument("--screenshot", help="Optional PNG output path")
-    p_verify.add_argument(
+    overlay_expectation = p_verify.add_mutually_exclusive_group()
+    overlay_expectation.add_argument(
         "--expect-overlay-app",
         action="store_true",
         help="Navigate to and validate the installed Developer Diagnostics example",
+    )
+    overlay_expectation.add_argument(
+        "--expect-overlay-app-fallback",
+        action="store_true",
+        help="Trigger the example app and verify optional-script failure recovery",
     )
     p_verify.add_argument(
         "--expect-can-replay",

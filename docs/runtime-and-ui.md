@@ -17,7 +17,7 @@ targets are:
 74.00.324A. `Utility.prototype.loadScript` creates a script element, assigns an
 `onload` handler, and appends it to the document head.
 
-It has no observed:
+The stock implementation has no observed:
 
 - `onerror` handler;
 - timeout;
@@ -26,18 +26,28 @@ It has no observed:
 - failure callback;
 - structured record of the resource that blocked startup.
 
-This is a high-value resilience target. The first implementation should add a
-failure callback and diagnostic state without changing success-path ordering.
-A timeout should be introduced only after measuring legitimate CMU load times.
+The reversible Developer Diagnostics integration now wraps that stock method
+without replacing `Utility.js`. It preserves the existing success callback and
+load ordering, adds an idempotent `onerror` path, and retains the latest 80
+structured outcomes in `window.__cmuScriptLoaderDiagnostics`. Callers are
+required by default. The example application is explicitly optional: if its
+script fails, the integration removes its Applications entry, discards only
+messages targeting that app, clears its loading bookkeeping, and returns the
+framework to Applications in the idle state. Required stock scripts continue
+through the factory state-timeout/restart policy.
 
-Recommended loader contract:
+No loader timeout was added. A timeout should be introduced only after
+measuring legitimate CMU load times.
 
-- one terminal callback with `{ok, url, elapsedMs, error}`;
-- explicit timeout supplied by callers, with a conservative default;
-- idempotent completion guard so timeout and `onload` cannot both complete;
-- log level appropriate to failure, not every normal operation;
-- optional required/optional classification;
-- safe-mode startup when a nonessential app fails.
+Remaining loader work before considering a broader framework patch:
+
+- measure stock and overlay resource-load latency on real hardware before
+  selecting any timeout;
+- decide whether retry is safe for any individual resource class;
+- connect optional-app failures to a persistent/browser-readiness signal once
+  that signal is proven on a bench CMU; and
+- consider a stock `Utility.js` patch only if multiple applications need the
+  contract and the overlay hook is no longer sufficient.
 
 ## v74 WebSocket ordering code
 
@@ -137,4 +147,3 @@ Every deployable UI patch should pass:
 Avoid broad minification initially. It makes field diagnosis harder, can expose
 old-engine parser bugs, and changes many boot-critical resources for relatively
 small gains. Target measured hot paths and logging first.
-
