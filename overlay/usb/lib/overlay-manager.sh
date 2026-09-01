@@ -12,6 +12,8 @@ OVERLAY_NVRAM_BACKUP_DIR="$OVERLAY_DATA_DIR/backups/nvram"
 OVERLAY_STATE_FILE="$OVERLAY_DATA_DIR/state"
 OVERLAY_ATTEMPT_FILE="$OVERLAY_DATA_DIR/boot-attempts"
 OVERLAY_ACTIVE_TRANSACTION="$OVERLAY_DATA_DIR/active-transaction"
+OVERLAY_CAN_PID_FILE="$OVERLAY_DATA_DIR/can-capture.pid"
+OVERLAY_CAN_OUTPUT_FILE="$OVERLAY_DATA_DIR/can-capture-output"
 OVERLAY_DATA_LOG="$OVERLAY_DATA_DIR/journal.log"
 OVERLAY_USB_REAL=$(readlink -f "$OVERLAY_USB_DIR" 2>/dev/null || printf '%s' "$OVERLAY_USB_DIR")
 OVERLAY_DATA_REAL=$(readlink -f "$OVERLAY_DATA_DIR" 2>/dev/null || true)
@@ -35,6 +37,7 @@ OVERLAY_LOG_READY=0
 OVERLAY_MUTATION_STARTED=0
 OVERLAY_ACTION=""
 OVERLAY_HASH_TOOL=""
+OVERLAY_CAN_RESULT_MESSAGE=""
 
 overlay_stderr() { printf '%s\n' "[cmu-overlay] $*" >&2; }
 
@@ -160,7 +163,10 @@ overlay_init_environment() {
         OVERLAY_STATE_FILE="$OVERLAY_DATA_DIR/state"
         OVERLAY_ATTEMPT_FILE="$OVERLAY_DATA_DIR/boot-attempts"
         OVERLAY_ACTIVE_TRANSACTION="$OVERLAY_DATA_DIR/active-transaction"
+        OVERLAY_CAN_PID_FILE="$OVERLAY_DATA_DIR/can-capture.pid"
+        OVERLAY_CAN_OUTPUT_FILE="$OVERLAY_DATA_DIR/can-capture-output"
         OVERLAY_DATA_LOG="$OVERLAY_DATA_DIR/journal.log"
+        OVERLAY_DATA_REAL=$(readlink -f "$OVERLAY_DATA_DIR" 2>/dev/null || true)
     else
         [ -d /jci ] || {
             overlay_stderr "refusing to run off-target: /jci is missing"
@@ -208,7 +214,7 @@ overlay_popup() {
 overlay_choose_action() {
     if [ "${MZD_OVERLAY_TEST_MODE:-0}" = "1" ]; then
         case "${MZD_OVERLAY_TEST_ACTION:-install}" in
-            install|repair|disable|restore|cancel) printf '%s\n' "${MZD_OVERLAY_TEST_ACTION:-install}" ;;
+            install|repair|disable|restore|capture-can|cancel) printf '%s\n' "${MZD_OVERLAY_TEST_ACTION:-install}" ;;
             *) return 1 ;;
         esac
         return
@@ -219,17 +225,34 @@ overlay_choose_action() {
     }
     killall -q jci-dialog 2>/dev/null || true
     if [ "$(overlay_expected_state)" = enabled ]; then
+        overlay_capture_label="CAPTURE CAN"
+        [ -f "$OVERLAY_CAN_PID_FILE" ] && overlay_capture_label="STOP CAN"
         /jci/tools/jci-dialog \
             --3-button-dialog \
             --title="CMU OVERLAY" \
-            --text="The reversible overlay is enabled.\nChoose an action." \
-            --ok-label="REPAIR" \
-            --cancel-label="DISABLE" \
+            --text="The reversible overlay is enabled.\nCapture receive-only gateway traffic to this USB, or manage the overlay." \
+            --ok-label="$overlay_capture_label" \
+            --cancel-label="MANAGE" \
             --button3-label="CANCEL" >/dev/null 2>&1
         overlay_dialog_rc=$?
         case "$overlay_dialog_rc" in
-            0) printf 'repair\n' ;;
-            1) printf 'disable\n' ;;
+            0) printf 'capture-can\n' ;;
+            1)
+                /jci/tools/jci-dialog \
+                    --3-button-dialog \
+                    --title="CMU OVERLAY" \
+                    --text="Repair the installed overlay or restore stock files?" \
+                    --ok-label="REPAIR" \
+                    --cancel-label="DISABLE" \
+                    --button3-label="CANCEL" >/dev/null 2>&1
+                overlay_manage_rc=$?
+                case "$overlay_manage_rc" in
+                    0) printf 'repair\n' ;;
+                    1) printf 'disable\n' ;;
+                    2) printf 'cancel\n' ;;
+                    *) return 1 ;;
+                esac
+                ;;
             2) printf 'cancel\n' ;;
             *) return 1 ;;
         esac
@@ -482,6 +505,145 @@ overlay_check_firmware() {
     grep -F -q "JCI_SW_VER=\"$OVERLAY_FIRMWARE_VERSION\"" "$overlay_version_path" || return 1
     grep -F -q "JCI_SW_VER_PATCH=\"$OVERLAY_FIRMWARE_PATCH\"" "$overlay_version_path" || return 1
     return 0
+}
+
+overlay_can_process_state() {
+    OVERLAY_CAN_PID=""
+    [ ! -L "$OVERLAY_CAN_PID_FILE" ] || return 2
+    [ -e "$OVERLAY_CAN_PID_FILE" ] || return 1
+    [ -f "$OVERLAY_CAN_PID_FILE" ] || return 2
+    OVERLAY_CAN_PID=$(cat "$OVERLAY_CAN_PID_FILE" 2>/dev/null || true)
+    case "$OVERLAY_CAN_PID" in ''|*[!0-9]*) return 2 ;; esac
+    kill -0 "$OVERLAY_CAN_PID" 2>/dev/null || return 1
+    [ "${MZD_OVERLAY_TEST_MODE:-0}" = "1" ] && return 0
+    overlay_can_expected=$(readlink -f "$(overlay_target_path /jci/bin/cmu-can-listener)" 2>/dev/null || true)
+    overlay_can_actual=$(readlink -f "/proc/$OVERLAY_CAN_PID/exe" 2>/dev/null || true)
+    [ -n "$overlay_can_expected" ] && [ "$overlay_can_actual" = "$overlay_can_expected" ] || return 2
+    return 0
+}
+
+overlay_stop_can_capture() {
+    overlay_can_process_state
+    overlay_can_state=$?
+    if [ "$overlay_can_state" -eq 1 ]; then
+        rm -f "$OVERLAY_CAN_PID_FILE" 2>/dev/null || return 1
+        return 0
+    fi
+    [ "$overlay_can_state" -eq 0 ] || {
+        overlay_journal ERROR "can_capture=pid_conflict" || true
+        return 1
+    }
+    kill -TERM "$OVERLAY_CAN_PID" 2>/dev/null || return 1
+    overlay_can_wait=0
+    while kill -0 "$OVERLAY_CAN_PID" 2>/dev/null && [ "$overlay_can_wait" -lt 5 ]; do
+        sleep 1
+        overlay_can_wait=$((overlay_can_wait + 1))
+    done
+    kill -0 "$OVERLAY_CAN_PID" 2>/dev/null && {
+        overlay_journal ERROR "can_capture=stop_timeout pid=$OVERLAY_CAN_PID" || true
+        return 1
+    }
+    rm -f "$OVERLAY_CAN_PID_FILE" || return 1
+    overlay_sync || return 1
+    overlay_can_output=$(cat "$OVERLAY_CAN_OUTPUT_FILE" 2>/dev/null || printf 'unknown')
+    OVERLAY_CAN_RESULT_MESSAGE="CAN capture stopped.\n\nLog: $overlay_can_output\nIt is now safe to remove the USB."
+    overlay_journal INFO "can_capture=stopped pid=$OVERLAY_CAN_PID output=$overlay_can_output" || return 1
+    return 0
+}
+
+overlay_validate_can_payload() {
+    overlay_parse_manifest || return 1
+    overlay_check_firmware || return 1
+    overlay_can_found=0
+    while IFS='|' read -r overlay_target overlay_stock overlay_payload_rel overlay_payload_hash overlay_mode overlay_type; do
+        [ "$overlay_target" = /jci/bin/cmu-can-listener ] || continue
+        [ "$overlay_can_found" -eq 0 ] || return 1
+        [ "$overlay_stock" = absent ] && [ "$overlay_mode" = 0755 ] && [ "$overlay_type" = data ] || return 1
+        overlay_can_live=$(overlay_target_path "$overlay_target")
+        [ -f "$overlay_can_live" ] && [ ! -L "$overlay_can_live" ] && [ -x "$overlay_can_live" ] || return 1
+        [ "$(overlay_sha256 "$overlay_can_live")" = "$overlay_payload_hash" ] || return 1
+        overlay_can_found=1
+    done < "$OVERLAY_ENTRIES"
+    [ "$overlay_can_found" -eq 1 ]
+}
+
+overlay_start_can_capture() {
+    [ ! -e "$OVERLAY_ACTIVE_TRANSACTION" ] || {
+        overlay_journal ERROR "can_capture=blocked reason=active_transaction" || true
+        return 1
+    }
+    [ "$(overlay_expected_state)" = enabled ] || {
+        overlay_journal ERROR "can_capture=blocked reason=overlay_not_enabled" || true
+        return 1
+    }
+    overlay_validate_can_payload || {
+        overlay_journal ERROR "can_capture=blocked reason=payload_validation" || true
+        return 1
+    }
+    if [ "${MZD_OVERLAY_TEST_MODE:-0}" != "1" ]; then
+        case "$OVERLAY_USB_REAL" in
+            "$OVERLAY_DATA_REAL"/runtime/*)
+                overlay_journal ERROR "can_capture=blocked reason=runtime_bundle" || true
+                return 1
+                ;;
+        esac
+        overlay_usb_flags=$(awk -v path="$OVERLAY_USB_DIR" '$2 == path {print $4; exit}' /proc/mounts)
+        case ",$overlay_usb_flags," in *,rw,*) ;; *) return 1 ;; esac
+    fi
+    overlay_can_stamp=$(date -u '+%Y%m%dT%H%M%SZ' 2>/dev/null || printf 'time-unavailable')
+    overlay_can_output="$OVERLAY_USB_DIR/cmu-vim-can-$overlay_can_stamp.jsonl"
+    overlay_can_errors="$OVERLAY_USB_DIR/cmu-vim-can-$overlay_can_stamp.stderr.log"
+    [ ! -e "$overlay_can_output" ] && [ ! -e "$overlay_can_errors" ] || return 1
+    : > "$overlay_can_output" || return 1
+    : > "$overlay_can_errors" || return 1
+    overlay_can_logger=$(overlay_target_path /jci/bin/cmu-can-listener)
+    if [ "${MZD_OVERLAY_TEST_MODE:-0}" = "1" ] && [ -n "${MZD_OVERLAY_TEST_CAN_LOGGER:-}" ]; then
+        overlay_can_logger=$MZD_OVERLAY_TEST_CAN_LOGGER
+    fi
+    [ -x "$overlay_can_logger" ] && [ ! -L "$overlay_can_logger" ] || return 1
+    nohup "$overlay_can_logger" >> "$overlay_can_output" 2>> "$overlay_can_errors" </dev/null &
+    overlay_can_pid=$!
+    sleep 1
+    if ! kill -0 "$overlay_can_pid" 2>/dev/null; then
+        overlay_journal ERROR "can_capture=start_failed errors=$overlay_can_errors" || true
+        return 1
+    fi
+    overlay_write_atomic "$OVERLAY_CAN_OUTPUT_FILE" "$overlay_can_output" || {
+        kill -TERM "$overlay_can_pid" 2>/dev/null || true
+        return 1
+    }
+    overlay_write_atomic "$OVERLAY_CAN_PID_FILE" "$overlay_can_pid" || {
+        kill -TERM "$overlay_can_pid" 2>/dev/null || true
+        return 1
+    }
+    overlay_sync || {
+        kill -TERM "$overlay_can_pid" 2>/dev/null || true
+        rm -f "$OVERLAY_CAN_PID_FILE" 2>/dev/null || true
+        return 1
+    }
+    OVERLAY_CAN_RESULT_MESSAGE="Receive-only CAN capture started.\n\nLog: $overlay_can_output\nRun capture-can again to stop before removing the USB."
+    overlay_journal INFO "can_capture=started pid=$overlay_can_pid output=$overlay_can_output errors=$overlay_can_errors" || {
+        kill -TERM "$overlay_can_pid" 2>/dev/null || true
+        rm -f "$OVERLAY_CAN_PID_FILE" 2>/dev/null || true
+        return 1
+    }
+    return 0
+}
+
+overlay_action_capture_can() {
+    overlay_can_process_state
+    overlay_can_state=$?
+    case "$overlay_can_state" in
+        0) overlay_stop_can_capture ;;
+        1)
+            rm -f "$OVERLAY_CAN_PID_FILE" 2>/dev/null || return 1
+            overlay_start_can_capture
+            ;;
+        *)
+            overlay_journal ERROR "can_capture=blocked reason=pid_conflict" || true
+            return 1
+            ;;
+    esac
 }
 
 overlay_check_space() {
@@ -1161,6 +1323,9 @@ overlay_verify_targets() {
 
 overlay_transaction() {
     overlay_direction=$1
+    if [ "$overlay_direction" = factory ]; then
+        overlay_stop_can_capture || return 1
+    fi
     overlay_transaction_begin "$overlay_direction" || return 1
     overlay_enter_mutation_state || {
         overlay_transaction_abort
@@ -1302,13 +1467,14 @@ overlay_cleanup_files() {
 
 overlay_usage() {
     printf '%s\n' \
-        "Usage: install-patches.sh {install|verify|repair|disable|restore|boot-attempt|boot-success}" \
+        "Usage: install-patches.sh {install|verify|repair|disable|restore|capture-can|boot-attempt|boot-success}" \
         "" \
         "install       apply a completely stock overlay set" \
         "verify        verify the state recorded under /data" \
         "repair        re-apply payloads from any known stock/payload mixture" \
         "disable       restore stock targets but retain backups" \
         "restore       restore stock targets and record restored state" \
+        "capture-can   start or stop receive-only gateway capture to this USB" \
         "boot-attempt  increment the boot counter and roll back at its limit" \
         "boot-success  reset the boot counter after a healthy HMI startup"
 }
@@ -1335,7 +1501,7 @@ overlay_main() {
         OVERLAY_ACTION=$1
     fi
     case "$OVERLAY_ACTION" in
-        install|verify|repair|disable|restore|boot-attempt|boot-success) ;;
+        install|verify|repair|disable|restore|capture-can|boot-attempt|boot-success) ;;
         *) overlay_usage >&2; overlay_guard_release; return 2 ;;
     esac
     trap 'overlay_stderr "interrupted"; : > "$OVERLAY_TMP.interrupted"' HUP INT TERM
@@ -1353,6 +1519,20 @@ overlay_main() {
         overlay_cleanup_files
         return 1
     }
+    if [ "$OVERLAY_ACTION" = capture-can ]; then
+        overlay_action_capture_can
+        overlay_rc=$?
+        if [ "$overlay_rc" -eq 0 ]; then
+            overlay_journal INFO "action=result status=ok" || overlay_rc=1
+            [ "$overlay_rc" -ne 0 ] || overlay_popup "$OVERLAY_CAN_RESULT_MESSAGE"
+        else
+            overlay_journal ERROR "action=result status=failed" || true
+            overlay_popup "CAN capture action failed.\n\nSee overlay-manager.log on the USB."
+        fi
+        overlay_cleanup_files
+        trap - HUP INT TERM
+        return "$overlay_rc"
+    fi
     overlay_capture_safety_state || {
         overlay_journal ERROR "safety_state=capture_failed" || true
         overlay_cleanup_files

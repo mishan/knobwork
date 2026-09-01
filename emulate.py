@@ -12,6 +12,7 @@ import argparse
 import shutil
 import json
 
+from emulation.can_replay import CanReplayError, load_can_capture
 from emulation.firmware_input import (
     FirmwareInputError,
     discover_default_rootfs,
@@ -69,6 +70,13 @@ def cmd_ui(args):
     env["ROOTFS_PATH"] = selected_rootfs(args)
     if args.proxy:
         env["PROXY_MODE"] = "true"
+    if args.can_replay:
+        capture = load_can_capture(args.can_replay)
+        env["CAN_REPLAY_PATH"] = capture["path"]
+        print(
+            "[EMU] Validated VIM CAN replay: "
+            f"{capture['frameCount']} frames from {capture['path']}"
+        )
 
     print(f"[EMU] Launching HMI Browser Harness on http://localhost:{args.port}")
     try:
@@ -95,6 +103,8 @@ def cmd_verify_ui(args):
         env["EMU_SCREENSHOT"] = args.screenshot
     if args.expect_overlay_app:
         env["EMU_EXPECT_OVERLAY_APP"] = "true"
+    if args.expect_can_replay:
+        env["EMU_EXPECT_CAN_REPLAY"] = "true"
     return subprocess.run(["node", verifier], env=env).returncode
 
 def cmd_build_guest(args):
@@ -141,6 +151,12 @@ def cmd_inject(args):
     injector_script = os.path.join(BASE_DIR, "emulation/shims/vip_can_injector.py")
     cmd = [sys.executable, injector_script, "--scenario", args.scenario, "--url", args.url]
     return subprocess.run(cmd).returncode
+
+
+def cmd_can(args):
+    capture = load_can_capture(args.capture)
+    print(json.dumps(capture, indent=2, sort_keys=True))
+    return 0
 
 
 def cmd_overlay(args):
@@ -236,7 +252,17 @@ def main():
     p_ui.add_argument("--port", type=int, default=8080, help="HTTP server port")
     add_firmware_input_arguments(p_ui)
     p_ui.add_argument("--proxy", action="store_true", help="Proxy WebSockets to QEMU guest")
+    p_ui.add_argument(
+        "--can-replay",
+        metavar="CAPTURE.jsonl",
+        help="Validate and expose a receive-only VIM CAN capture to diagnostics",
+    )
     p_ui.set_defaults(func=cmd_ui)
+
+    # CAN capture validation
+    p_can = subparsers.add_parser("can", help="Validate receive-only VIM CAN captures")
+    p_can.add_argument("capture", help="JSONL capture produced by cmu-can-listener")
+    p_can.set_defaults(func=cmd_can)
 
     # verify-ui
     p_verify = subparsers.add_parser("verify-ui", help="Run the headless 800x480 HMI regression")
@@ -252,6 +278,11 @@ def main():
         "--expect-overlay-app",
         action="store_true",
         help="Navigate to and validate the installed Developer Diagnostics example",
+    )
+    p_verify.add_argument(
+        "--expect-can-replay",
+        action="store_true",
+        help="Require validated VIM CAN replay data in Developer Diagnostics",
     )
     p_verify.set_defaults(func=cmd_verify_ui)
 
@@ -364,7 +395,12 @@ def main():
     args = parser.parse_args()
     try:
         result = args.func(args)
-    except (FirmwareInputError, OverlayWorkflowError, subprocess.CalledProcessError) as error:
+    except (
+        CanReplayError,
+        FirmwareInputError,
+        OverlayWorkflowError,
+        subprocess.CalledProcessError,
+    ) as error:
         parser.error(str(error))
     sys.exit(result)
 

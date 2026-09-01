@@ -57,6 +57,7 @@ const CHROME = resolveChromePath();
 const SCREENSHOT = process.env.EMU_SCREENSHOT || "";
 const EXPECTED_MODE = process.env.EMU_EXPECT_MODE || "mock";
 const EXPECT_OVERLAY_APP = process.env.EMU_EXPECT_OVERLAY_APP === "true";
+const EXPECT_CAN_REPLAY = process.env.EMU_EXPECT_CAN_REPLAY === "true";
 const REQUIRE_QUEUED_STARTUP = process.env.EMU_REQUIRE_QUEUED_STARTUP === "true";
 const WIDTH = 800;
 const HEIGHT = 480;
@@ -408,8 +409,18 @@ async function main() {
         if (EXPECT_OVERLAY_APP && EXPECTED_MODE !== "mock") {
             throw new Error("the overlay example verification requires mock mode");
         }
+        if (EXPECT_CAN_REPLAY && !EXPECT_OVERLAY_APP) {
+            throw new Error("CAN replay verification requires the overlay example application");
+        }
         const startupHealth = await getJson(new URL("/__emu/health", TARGET_URL));
         assertHealthMode(startupHealth);
+        if (EXPECT_CAN_REPLAY && (!startupHealth.canReplay
+                || !startupHealth.canReplay.available
+                || startupHealth.canReplay.frameCount < 1)) {
+            throw new Error(
+                "validated CAN replay is unavailable: " + JSON.stringify(startupHealth.canReplay)
+            );
+        }
         let overlayStatus = null;
         if (EXPECT_OVERLAY_APP) {
             if (!startupHealth.overlayWorkspace) {
@@ -648,14 +659,23 @@ async function main() {
                 "return {" +
                     "hasVehicleInputs:labels.indexOf('Vehicle Inputs (observed by GUI)') >= 0," +
                     "hasSteeringAngle:labels.indexOf('Steering angle') >= 0," +
-                    "capturedMmui:window.__developerDiagnosticsInputs.mmui.length" +
+                    "hasGatewayCan:labels.indexOf('Gateway CAN (receive-only)') >= 0," +
+                    "capturedMmui:window.__developerDiagnosticsInputs.mmui.length," +
+                    "capturedCan:window.__developerDiagnosticsInputs.can.length" +
                 "};" +
             "}())");
             if (!inputDiagnostics.hasVehicleInputs
                     || !inputDiagnostics.hasSteeringAngle
+                    || !inputDiagnostics.hasGatewayCan
                     || inputDiagnostics.capturedMmui < 1) {
                 throw new Error(
                     "vehicle input diagnostics are incomplete: "
+                    + JSON.stringify(inputDiagnostics)
+                );
+            }
+            if (EXPECT_CAN_REPLAY && inputDiagnostics.capturedCan < 1) {
+                throw new Error(
+                    "CAN replay did not reach Developer Diagnostics: "
                     + JSON.stringify(inputDiagnostics)
                 );
             }

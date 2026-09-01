@@ -19,7 +19,10 @@ records. A reversible Developer Diagnostics proof-of-concept is installed under
 Applications and is exercised by the stock 800x480 UI emulator; it reports
 manager logs plus shared and incoming GUI data without replacing stock framework
 files. The disposable workflow runs the real manager through the stock ARM
-BusyBox shell and exposes lifecycle and interrupted-transaction drills.
+BusyBox shell and exposes lifecycle and interrupted-transaction drills. The
+overlay now also carries an opt-in receive-only VIM listener; its USB action
+writes capture files to the removable drive and the emulator replays validated
+captures into Developer Diagnostics.
 Bench-CMU validation and a browser-level success signal remain required before
 this pattern is treated as hardware-ready. See
 [`overlay/README.md`](../overlay/README.md).

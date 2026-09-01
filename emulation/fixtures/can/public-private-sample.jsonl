@@ -1,0 +1,4 @@
+{"schema":"mazda-cmu-vim-can-v1","sequence":1,"channel":"public","port":1,"id":288,"idHex":"0x120","length":8,"data":"0000000000000000"}
+{"schema":"mazda-cmu-vim-can-v1","sequence":2,"channel":"public","port":1,"id":291,"idHex":"0x123","length":3,"data":"112233"}
+{"schema":"mazda-cmu-vim-can-v1","sequence":3,"channel":"private","port":0,"id":416,"idHex":"0x1A0","length":4,"data":"01020304"}
+{"schema":"mazda-cmu-vim-can-v1","sequence":4,"channel":"private","port":0,"id":427,"idHex":"0x1AB","length":8,"data":"DEADBEEF01020304"}

@@ -49,6 +49,7 @@ class OverlayWorkflowTests(unittest.TestCase):
         self.workspace = self.base / "workspace"
         scripts = self.source / "jci" / "scripts"
         scripts.mkdir(parents=True)
+        (self.source / "jci/bin").mkdir()
         (self.source / "jci/gui/apps/system/js").mkdir(parents=True)
         (self.source / "jci/gui/apps/system/css").mkdir(parents=True)
         (self.source / "jci" / "mmui").mkdir()

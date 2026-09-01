@@ -40,9 +40,14 @@ framework files, change NVRAM, or patch native binaries.
 - The original root mount mode and watchdog value are captured, verified after
   restoration, and failures are returned to the caller.
 - Identical journals are appended on the USB and under `/data/cmu-overlay`.
+- The native CAN listener is installed as a stock-absent, hash-pinned file. It
+  has no boot hook; capture is explicit, receive-only, and writes only to the
+  currently mounted overlay USB. Disable, restore, and safe mode stop it before
+  removing the executable.
 
 The accepted actions are `install`, `verify`, `repair`, `disable`, and
-`restore`. `boot-attempt` increments the persistent counter and restores all
+`restore`, plus the USB-only `capture-can` start/stop toggle. `boot-attempt`
+increments the persistent counter and restores all
 stock targets in safe mode on the third unacknowledged attempt. Install and
 repair preserve a read-only runtime copy under
 `/data/cmu-overlay/runtime/<manifest-sha256>` so boot actions remain available
@@ -87,6 +92,13 @@ MMUI, AppSDK, and DBAPI channel. The UI shows shared values and the latest 12
 messages from each channel; the complete bounded capture is available to browser
 developer tools as `window.__developerDiagnosticsInputs`.
 
+When the emulator is launched with `--can-replay`, the app also displays the
+latest validated public/private VIM gateway records in a separate
+**Gateway CAN (receive-only)** section. These records are not presented as
+decoded vehicle signals or confirmed raw CAN arbitration IDs. Capture format,
+bench constraints, and the receive-only native collector are documented in
+[`can/README.md`](../can/README.md).
+
 Steering angle is detected by field name anywhere in observed input. The stock
 v74 application JavaScript does not name or consume a steering-angle signal
 (`SteeringWheelLoc` is left/right-hand-drive configuration, not an angle), so
@@ -111,7 +123,10 @@ exact firmware gate.
 
 With no arguments, the launcher opens a native, state-aware dialog: a stock or
 disabled unit offers install/cancel, while an enabled unit offers
-repair/disable/cancel. Explicit actions remain available from an authenticated
+CAN capture/manage/cancel; the manage dialog then offers
+repair/disable/cancel. Capture creates timestamped JSONL and stderr files on
+that USB. Invoke `capture-can` again and wait for the stopped message before
+removing the drive. Explicit actions remain available from an authenticated
 bench shell. Do not deploy it to a vehicle merely because the off-target tests
 pass.
 
@@ -155,6 +170,11 @@ the default and requires `qemu-arm` plus `root/bin/busybox`; external utilities
 and device behavior remain host-backed test shims. `--shell host` is available
 only for debugging the harness itself.
 
+The emulator does not run the real VIM listener because it has no `vim_app` or
+VIP hardware. Use `ui --can-replay` for the complete developer UI workflow;
+the off-target overlay suite separately proves installation/removal and the
+USB capture process lifecycle with a fake receive-only producer.
+
 To rehearse restart recovery, interrupt an install after its second durable
 mutation, inspect the live transaction pointer, then invoke the manager again:
 
@@ -193,6 +213,16 @@ python3 emulate.py verify-ui --expect-overlay-app \
   --screenshot /tmp/mazda-overlay-diagnostics.png
 ```
 
+To exercise the receive-only gateway-data surface with the synthetic replay
+fixture:
+
+```sh
+python3 emulate.py ui --root scratch/overlay-workspace/root \
+  --can-replay emulation/fixtures/can/public-private-sample.jsonl
+
+python3 emulate.py verify-ui --expect-overlay-app --expect-can-replay
+```
+
 The harness serves manager state through `/__emu/overlay` only when its root is
 inside a validated overlay workspace. A normal stock root continues to receive
 the empty developer-mode hook. Status is also available as machine-readable
@@ -221,7 +251,10 @@ restoration, the installed boot bridge, third-attempt safe mode, fail-open
 runtime corruption, transactional NVRAM, simulated process loss during file,
 NVRAM, metadata, commit, and rollback boundaries, corrupted recovery records,
 incomplete backup pairs, the no-argument dialog path, and JavaScript preflight
-before remount. The emulator-workflow suite additionally exercises the public
+before remount. It also verifies that the native listener installs and removes
+transactionally and that capture starts, writes JSONL to the USB, stops, and
+does not leave a second process. The emulator-workflow suite additionally
+exercises the public
 CLI, source-tree preservation, `/data` mount modeling, application payload
 installation/removal, persisted-runtime execution, guarded cleanup, and restart
 recovery after an injected process loss. `verify-ui --expect-overlay-app` then

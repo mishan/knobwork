@@ -47,6 +47,7 @@ class OverlayReplica:
         self.guard = self.base / "guard"
         shutil.copytree(SOURCE_USB, self.usb)
         (self.root / "jci/scripts").mkdir(parents=True)
+        (self.root / "jci/bin").mkdir(parents=True)
         (self.root / "data/integration").mkdir(parents=True)
         (self.root / "jci/gui/apps/system/js").mkdir(parents=True)
         (self.root / "jci/gui/apps/system/css").mkdir(parents=True)
@@ -91,6 +92,7 @@ class OverlayReplica:
         crash_point: str | None = None,
         runtime: bool = False,
         hash_tool: str | None = None,
+        can_logger: Path | None = None,
     ) -> subprocess.CompletedProcess[str]:
         env = os.environ.copy()
         env.update(
@@ -111,6 +113,8 @@ class OverlayReplica:
             env["MZD_OVERLAY_CRASH_POINT"] = crash_point
         if hash_tool:
             env["MZD_OVERLAY_TEST_HASH_TOOL"] = hash_tool
+        if can_logger:
+            env["MZD_OVERLAY_TEST_CAN_LOGGER"] = str(can_logger)
         entry = self.usb / "install-patches.sh"
         if runtime:
             runtime_id = (self.data / "runtime-current").read_text().strip()
@@ -170,6 +174,7 @@ class OverlayReplica:
         return (
             scripts / "cmu-overlay-diagnostic.sh",
             scripts / "cmu-overlay-diagnostic.conf",
+            self.root / "jci/bin/cmu-can-listener",
             self.root / "data/integration/developer_mode_GuiConfig.js",
             self.root / "jci/gui/apps/system/js/developerdiagnosticsApp.js",
             self.root / "jci/gui/apps/system/css/developerdiagnosticsApp.css",
@@ -264,6 +269,61 @@ class OverlayManagerTests(unittest.TestCase):
             else:
                 os.environ["MZD_OVERLAY_TEST_ACTION"] = env_action
         self.assertTrue(all(not target.exists() for target in self.replica.targets))
+
+    def test_receive_only_can_capture_toggles_and_writes_to_usb(self) -> None:
+        self.assert_ok(self.replica.run("install"))
+        listener = self.replica.root / "jci/bin/cmu-can-listener"
+        self.assertEqual(sha256(listener), sha256(self.replica.usb / "payloads/can/cmu-can-listener"))
+        self.assertEqual(listener.stat().st_mode & 0o777, 0o755)
+
+        fake = self.replica.base / "fake-can-listener.sh"
+        fake.write_text(
+            "#!/bin/sh\n"
+            "trap 'exit 0' TERM INT\n"
+            "printf '%s\\n' '{\"schema\":\"mazda-cmu-vim-can-v1\",\"sequence\":1,\"channel\":\"public\",\"port\":1,\"id\":291,\"idHex\":\"0x123\",\"length\":1,\"data\":\"11\"}'\n"
+            "while :; do sleep 1; done\n",
+            encoding="ascii",
+        )
+        fake.chmod(0o755)
+
+        pid = 0
+        try:
+            started = self.replica.run("capture-can", can_logger=fake)
+            self.assert_ok(started)
+            pid = int((self.replica.data / "can-capture.pid").read_text().strip())
+            os.kill(pid, 0)
+            output = Path(
+                (self.replica.data / "can-capture-output").read_text().strip()
+            )
+            self.assertEqual(output.parent, self.replica.usb)
+            self.assertIn('"schema":"mazda-cmu-vim-can-v1"', output.read_text())
+
+            stopped = self.replica.run("capture-can", can_logger=fake)
+            self.assert_ok(stopped)
+            self.assertFalse((self.replica.data / "can-capture.pid").exists())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(pid, 0)
+            pid = 0
+        finally:
+            if pid:
+                try:
+                    os.kill(pid, 15)
+                except ProcessLookupError:
+                    pass
+
+        self.assert_ok(self.replica.run("disable"))
+        self.assertFalse(listener.exists())
+
+    def test_can_capture_rejects_unsafe_pid_state(self) -> None:
+        self.assert_ok(self.replica.run("install"))
+        pid_file = self.replica.data / "can-capture.pid"
+        pid_file.symlink_to("/proc/1/status")
+
+        result = self.replica.run("capture-can")
+
+        self.assert_failed(result)
+        self.assertTrue(pid_file.is_symlink())
+        self.assertEqual(list(self.replica.usb.glob("cmu-vim-can-*.jsonl")), [])
 
     def test_exact_firmware_metadata_is_required_before_mutation(self) -> None:
         self.replica.version_file.write_text(VERSION_TEXT.replace("74.00.324", "74.00.331"))
@@ -447,7 +507,7 @@ class OverlayManagerTests(unittest.TestCase):
         key_file = self.replica.add_nvram_entry(
             "diagnostic_overlay_state", "factory", "enabled"
         )
-        crashed = self.replica.run("install", crash_point="mutation:9")
+        crashed = self.replica.run("install", crash_point="mutation:10")
         self.assertEqual(crashed.returncode, 99, crashed.stdout + crashed.stderr)
         self.assertEqual(key_file.read_text(), "enabled\n")
 

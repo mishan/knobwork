@@ -10,6 +10,7 @@ developerdiagnosticsApp.prototype.appInit = function ()
 {
     this._overlayStatus = null;
     this._emulatorHealth = null;
+    this._canStatus = null;
     this._requestErrors = [];
     this._dataList = this._buildDataList();
     this._contextTable = {
@@ -184,6 +185,43 @@ developerdiagnosticsApp.prototype._appendVehicleInputRows = function (items)
     ));
 };
 
+developerdiagnosticsApp.prototype._appendCanRows = function (items)
+{
+    var can = this._canStatus || {
+        available: false, mode: "unavailable", frameCount: 0, frames: []
+    };
+    var frames = can.frames || [];
+    items.push(this._headingRow("Gateway CAN (receive-only)"));
+    if (!can.available) {
+        items.push(this._statusRow("CAN source", "not connected or replayed"));
+        return;
+    }
+    items.push(this._statusRow(
+        "CAN source",
+        can.mode + " / " + can.frameCount + " total frames"
+    ));
+    items.push(this._statusRow(
+        "Public / private",
+        can.publicFrames + " / " + can.privateFrames
+    ));
+    var first = Math.max(0, frames.length - 12);
+    for (var index = first; index < frames.length; index += 1) {
+        var frame = frames[index];
+        items.push({
+            appData: "none",
+            text1: "CAN " + frame.channel + " " + frame.idHex
+                + " [" + frame.length + "] " + this._short(frame.data, 42),
+            itemStyle: "style01",
+            disabled: false,
+            hasCaret: false
+        });
+    }
+    items.push(this._statusRow(
+        "CAN decoding",
+        "gateway frames are not yet mapped to vehicle signals"
+    ));
+};
+
 developerdiagnosticsApp.prototype._buildDataList = function ()
 {
     var overlay = this._overlayStatus || {};
@@ -212,6 +250,7 @@ developerdiagnosticsApp.prototype._buildDataList = function ()
     ];
 
     this._appendVehicleInputRows(items);
+    this._appendCanRows(items);
 
     var journal = overlay.journal || [];
     var firstLog = Math.max(0, journal.length - 5);
@@ -297,6 +336,15 @@ developerdiagnosticsApp.prototype._refresh = function ()
             self._requestErrors.push(error);
         } else {
             self._emulatorHealth = data;
+        }
+        self._render();
+    });
+    this._requestJson("/__emu/can", function (error, data) {
+        if (error) {
+            self._requestErrors.push(error);
+        } else {
+            self._canStatus = data;
+            window.__developerDiagnosticsInputs.can = data.frames || [];
         }
         self._render();
     });

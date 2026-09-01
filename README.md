@@ -30,6 +30,7 @@ none of the patch concepts documented here have been installed on a CMU.
 - [Emulator handoff review and verified baseline](docs/emulator-review.md)
 - [Modification and recovery roadmap](docs/roadmap.md)
 - [Reversible overlay manager](overlay/README.md)
+- [Receive-only VIM CAN capture](can/README.md)
 - [Evidence, hashes, and sources](docs/evidence.md)
 
 ## Confidence language
@@ -86,6 +87,18 @@ MMUI, AppSDK, and DBAPI inputs. Run it and its dedicated UI gate with:
 python3 emulate.py ui --root scratch/overlay-workspace/root
 python3 emulate.py verify-ui --expect-overlay-app \
   --screenshot /tmp/mazda-overlay-diagnostics.png
+```
+
+The overlay also installs, but never autostarts, a receive-only VIM listener.
+On a bench CMU its explicit `capture-can` action writes JSONL to the overlay
+USB. Off-target, validate and replay either a real capture or the bundled
+sample in Developer Diagnostics:
+
+```sh
+python3 emulate.py can emulation/fixtures/can/public-private-sample.jsonl
+python3 emulate.py ui --root scratch/overlay-workspace/root \
+  --can-replay emulation/fixtures/can/public-private-sample.jsonl
+python3 emulate.py verify-ui --expect-overlay-app --expect-can-replay
 ```
 
 The UI server and its regression run as separate commands:

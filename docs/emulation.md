@@ -72,6 +72,14 @@ four stages:
   it and validates manager logs, observed GUI input capture, navigation, and a
   clean browser runtime. See
   [`overlay/README.md`](../overlay/README.md#developer-emulator-workflow).
+- **Receive-only VIM CAN workflow:** `can/cmu_can_listener.c` mirrors the stock
+  factory plug-in's public/private receive callback without linking a transmit
+  API. Its ARM EABI executable is a hash-pinned, stock-absent overlay payload;
+  the USB manager starts and stops it only on request and directs JSONL output
+  to the mounted removable drive. `emulate.py can` strictly validates that
+  output, while `ui --can-replay` exposes a capture to Developer Diagnostics.
+  Gateway IDs are kept distinct from decoded vehicle signals and are not yet
+  claimed to be raw CAN arbitration IDs. See [`can/README.md`](../can/README.md).
 
 ## Existing `mazda_emulation` repository
 

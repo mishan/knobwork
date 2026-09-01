@@ -14,7 +14,8 @@
         shared: {},
         mmui: [],
         appsdk: [],
-        dbapi: []
+        dbapi: [],
+        can: []
     };
 
     function copyInput(value) {
