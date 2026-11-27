@@ -1,7 +1,7 @@
 {
-  "name": "mazda-firmware-emulation",
+  "name": "knobwork",
   "version": "1.0.0",
-  "description": "Emulation harness for Mazda Connect Gen 6 CMU firmware",
+  "description": "Research, emulation, and reversible-overlay tools for Gen 6 infotainment head units",
   "main": "emulation/ui_harness/main.js",
   "scripts": {
     "start": "node emulation/ui_harness/main.js",

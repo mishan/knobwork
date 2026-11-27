@@ -1,6 +1,14 @@
-# Mazda Gen 6 firmware improvement research
+# Knobwork
 
-This directory records the analysis of the Mazda Connect Gen 6 CMU firmware and
+Research, emulation, and reversible-overlay tools for Mazda Connect Gen 6
+infotainment head units (CMU).
+
+> This is an unofficial community project. It is not affiliated with, endorsed
+> by, or sponsored by Mazda Motor Corporation, Johnson Controls, Visteon, or
+> their affiliates. Mazda and Mazda Connect names are used only to identify
+> compatibility with the relevant owner-supplied system.
+
+This repository records the analysis of the Mazda Connect Gen 6 CMU firmware and
 the proposed development strategy for improving runtime performance, resilience,
 and the user interface.
 
