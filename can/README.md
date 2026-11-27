@@ -138,3 +138,8 @@ The replay path is intentionally a snapshot, not timed signal injection. A
 later decoder can correlate changing payload bits with known actions and emit
 named values such as steering angle only after the mapping is supported by
 captures.
+
+## License
+
+The listener source, build files and tests in `can/` are MIT-licensed; see
+[LICENSE](LICENSE).

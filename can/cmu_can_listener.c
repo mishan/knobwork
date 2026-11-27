@@ -1,4 +1,4 @@
-/*
+/* SPDX-License-Identifier: MIT
  * Receive-only Mazda CMU VIM CAN collector.
  *
  * This program deliberately has no VIM transmit API dependency.  It registers
