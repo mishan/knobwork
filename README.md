@@ -394,3 +394,15 @@ Portable, non-overwriting package tools are available through
 `python3 emulate.py unpack` / `python3 emulate.py pack` and directly under
 [`tools/firmware`](tools/firmware). Repacking does not create a valid Mazda RSA
 signature and is not, by itself, safe to flash.
+
+## License
+
+Unless a directory says otherwise, this repository is MIT-licensed; see
+[LICENSE](LICENSE). The exceptions are:
+
+| Path | License | Why |
+|---|---|---|
+| `overlay/` | GPL-3.0-or-later | Derived in part from TouchTune; see [overlay/NOTICE](overlay/NOTICE) |
+| `tools/firmware/` | GPL-3.0-only | Adapted from GPL-3.0-only packing scripts; see [tools/firmware/COPYING](tools/firmware/COPYING) |
+
+Dependencies keep their own licenses.
