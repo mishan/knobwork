@@ -141,6 +141,10 @@ def _manifest_records(
                     f"Manifest line {line_number}: invalid payload hash"
                 )
             payload = bundle / payload_name
+            if not _lexists(payload):
+                raise OverlayWorkflowError(
+                    f"Missing payload {payload_name}; see can/README.md for how to get it"
+                )
             if (
                 payload.is_symlink()
                 or not payload.is_file()

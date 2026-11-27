@@ -9,3 +9,4 @@ __pycache__/
 *.py[cod]
 *.core
 /emulation/shims/nvram_store.db
+/overlay/usb/payloads/can/cmu-can-listener

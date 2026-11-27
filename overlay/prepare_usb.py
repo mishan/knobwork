@@ -138,6 +138,8 @@ def validate_bundle() -> str:
         if payload_name.startswith("/") or ".." in payload_name or "//" in payload_name:
             raise BundleError(f"manifest line {line_number}: unsafe payload path")
         payload = USB_SOURCE / payload_name
+        if not payload.exists() and not payload.is_symlink():
+            raise BundleError(f"missing payload {payload_name}; see can/README.md for how to get it")
         if not payload.is_file() or sha256(payload) != payload_hash:
             raise BundleError(f"manifest line {line_number}: payload hash mismatch for {payload_name}")
         if not re.fullmatch(r"0[0-7]{3}", mode) or syntax not in {"sh", "js", "data"}:

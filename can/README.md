@@ -56,9 +56,22 @@ make -C can \
   CC=arm-linux-gnueabi-gcc
 ```
 
-The checked-in overlay payload is
-`overlay/usb/payloads/can/cmu-can-listener`; rebuilding it requires
+The overlay expects the executable at
+`overlay/usb/payloads/can/cmu-can-listener`, with the SHA-256 pinned in
+`overlay/usb/manifest.v1`. It is not tracked in Git: download it from the
+release built from this source, or build it as above and copy
+`can/build/cmu-can-listener` there. Building requires
 `gcc-arm-linux-gnueabi`, `libc6-dev-armel-cross`, and the extracted v74 root.
+Check the result with `sha256sum` against the manifest; the overlay refuses a
+payload whose hash differs. A build from a different toolchain can differ, in
+which case the manifest pin has to be updated deliberately.
+
+## Interoperability and distribution
+
+The listener is independently written. It links at run time against the
+VIM and IPC libraries already on the CMU; none of those libraries, nor the
+factory plug-in whose interface is described above, is distributed here. It
+only receives messages, as described under the safety boundary above.
 
 ## Install and capture from removable media
 
