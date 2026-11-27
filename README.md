@@ -13,9 +13,11 @@ the proposed development strategy for improving runtime performance, resilience,
 and the user interface.
 
 The working baseline is the North American `cmu150` firmware `74.00.324A`.
-Earlier `55.00.750B`, `70.00.021B`, and `70.00.100A` packages are retained as
-comparison points. Firmware is always user-supplied and is not committed here;
-none of the patch concepts documented here have been installed on a CMU.
+The analysis also compared the earlier `55.00.750B`, `70.00.021B`, and
+`70.00.100A` packages; their hashes are listed in
+[the firmware inventory](docs/firmware-inventory.md). No firmware is included
+in this repository; it is always user-supplied. None of the patch concepts
+documented here have been installed on a CMU.
 
 ## Current conclusions
 
