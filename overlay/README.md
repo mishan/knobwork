@@ -287,3 +287,9 @@ recovery after an injected process loss. `verify-ui --expect-overlay-app` then
 drives the visible application in the stock 800x480 HMI and fails on browser
 syntax or runtime errors. The `--expect-overlay-app-fallback` variant verifies
 immediate recovery from a missing optional application script.
+
+## License
+
+Everything under `overlay/` is GPL-3.0-or-later. It is a modified work
+derived in part from TouchTune 1.1.0; see [NOTICE](NOTICE) and
+[LICENSE](LICENSE).
