@@ -1,0 +1,697 @@
+{
+  "schema": "mazda-cmu-ui-scenario",
+  "version": 1,
+  "name": "v74 North America default (synthetic)",
+  "limits": {
+    "maxDelayMs": 2000,
+    "maxInboundBytes": 65536,
+    "maxOutboundBytes": 65536,
+    "maxActionsPerMessage": 64
+  },
+  "initialState": {
+    "initialized": false,
+    "localization": {
+      "region": "Region_NorthAmerica",
+      "language": "LANGS_US_ENGLISH",
+      "keyboardLanguage": "LANGS_KB_US_ENGLISH",
+      "timeFormat": "12hrs",
+      "temperature": "Fahrenheit",
+      "distance": "Miles",
+      "vehicleType": "J36"
+    }
+  },
+  "contexts": {
+    "HomeScreen": {
+      "uiaId": "system",
+      "ctxtId": "HomeScreen",
+      "focus": [
+        "system"
+      ],
+      "params": {}
+    },
+    "Applications": {
+      "uiaId": "system",
+      "ctxtId": "Applications",
+      "focus": [
+        "system"
+      ],
+      "params": {}
+    },
+    "Entertainment": {
+      "uiaId": "system",
+      "ctxtId": "Entertainment",
+      "focus": [
+        "system"
+      ],
+      "params": {}
+    },
+    "Communication": {
+      "uiaId": "system",
+      "ctxtId": "Communication",
+      "focus": [
+        "system"
+      ],
+      "params": {}
+    },
+    "Navigation": {
+      "uiaId": "emnavi",
+      "ctxtId": "NaviLoading",
+      "focus": [
+        "emnavi",
+        "system"
+      ],
+      "params": {}
+    },
+    "Settings": {
+      "uiaId": "syssettings",
+      "ctxtId": "DevicesTab",
+      "focus": [
+        "syssettings",
+        "system"
+      ],
+      "params": {}
+    }
+  },
+  "services": {
+    "mmui": {
+      "onConnect": [],
+      "rules": [
+        {
+          "id": "startup-settings",
+          "match": {
+            "msgType": "event",
+            "eventId": "Global.GetStartupSettings"
+          },
+          "actions": [
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "syssettings",
+                "msgId": "Region",
+                "params": {
+                  "payload": {
+                    "RegionValue": {
+                      "$state": "localization.region"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "syssettings",
+                "msgId": "VehicleType",
+                "params": {
+                  "payload": {
+                    "vtype": {
+                      "$state": "localization.vehicleType"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "syssettings",
+                "msgId": "TimeFormat",
+                "params": {
+                  "payload": {
+                    "timeFormat": {
+                      "$state": "localization.timeFormat"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "syssettings",
+                "msgId": "Temperature",
+                "params": {
+                  "payload": {
+                    "temperatureUnits": {
+                      "$state": "localization.temperature"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "syssettings",
+                "msgId": "Distance",
+                "params": {
+                  "payload": {
+                    "distanceUnits": {
+                      "$state": "localization.distance"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "syssettings",
+                "msgId": "KeyboardLanguage",
+                "params": {
+                  "payload": {
+                    "keyboardLanguage": {
+                      "$state": "localization.keyboardLanguage"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "syssettings",
+                "msgId": "LanguageSupported",
+                "params": {
+                  "payload": {
+                    "languageName": {
+                      "languageID": {
+                        "$state": "localization.language"
+                      },
+                      "vrSupport": false,
+                      "ttsSupport": false
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "init-gui",
+          "match": {
+            "msgType": "event",
+            "eventId": "Global.InitGui"
+          },
+          "actions": [
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "xmdata",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "hdtrafficimage",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "idm",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "ecoenergy",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "driverid",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "warnguide",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "vsm",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "schedmaint",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "vehicleStatus",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "vdt",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "notifications",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "favorites",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "contacts",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "phone",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "sms",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "email",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "syssettings",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "fmradio",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "amradio",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "stitcher",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "btaudio",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "send",
+              "message": {
+                "msgType": "msg",
+                "uiaId": "system",
+                "msgId": "StatusMenu",
+                "params": {
+                  "payload": {
+                    "statusMenu": {
+                      "appName": "auxin",
+                      "appStatus": "Available"
+                    }
+                  }
+                }
+              }
+            },
+            {
+              "type": "setState",
+              "path": "initialized",
+              "value": true
+            },
+            {
+              "type": "resetContext",
+              "context": "HomeScreen"
+            }
+          ]
+        },
+        {
+          "id": "home",
+          "match": {
+            "msgType": "event",
+            "eventId": "Global.IntentHome"
+          },
+          "when": {
+            "stateEquals": {
+              "path": "initialized",
+              "value": true
+            }
+          },
+          "actions": [
+            {
+              "type": "resetContext",
+              "context": "HomeScreen"
+            }
+          ]
+        },
+        {
+          "id": "back",
+          "match": {
+            "msgType": "event",
+            "eventId": "Global.GoBack"
+          },
+          "when": {
+            "stackDepthAtLeast": 2
+          },
+          "actions": [
+            {
+              "type": "popContext"
+            }
+          ]
+        },
+        {
+          "id": "select-applications",
+          "match": {
+            "msgType": "event",
+            "uiaId": "system",
+            "eventId": "SelectApplications"
+          },
+          "when": {
+            "contextIsNot": "Applications"
+          },
+          "actions": [
+            {
+              "type": "pushContext",
+              "context": "Applications"
+            }
+          ]
+        },
+        {
+          "id": "select-entertainment",
+          "match": {
+            "msgType": "event",
+            "uiaId": "system",
+            "eventId": "SelectEntertainment"
+          },
+          "when": {
+            "contextIsNot": "Entertainment"
+          },
+          "actions": [
+            {
+              "type": "pushContext",
+              "context": "Entertainment"
+            }
+          ]
+        },
+        {
+          "id": "select-communication",
+          "match": {
+            "msgType": "event",
+            "uiaId": "system",
+            "eventId": "SelectCommunication"
+          },
+          "when": {
+            "contextIsNot": "Communication"
+          },
+          "actions": [
+            {
+              "type": "pushContext",
+              "context": "Communication"
+            }
+          ]
+        },
+        {
+          "id": "select-navigation",
+          "match": {
+            "msgType": "event",
+            "uiaId": "system",
+            "eventId": "SelectNavigation"
+          },
+          "when": {
+            "contextIsNot": "Navigation"
+          },
+          "actions": [
+            {
+              "type": "pushContext",
+              "context": "Navigation"
+            }
+          ]
+        },
+        {
+          "id": "select-settings",
+          "match": {
+            "msgType": "event",
+            "uiaId": "system",
+            "eventId": "SelectSettings"
+          },
+          "when": {
+            "contextIsNot": "Settings"
+          },
+          "actions": [
+            {
+              "type": "pushContext",
+              "context": "Settings"
+            }
+          ]
+        }
+      ]
+    },
+    "dbapi": {
+      "onConnect": [],
+      "rules": []
+    },
+    "appsdk": {
+      "onConnect": [],
+      "rules": []
+    }
+  }
+}
