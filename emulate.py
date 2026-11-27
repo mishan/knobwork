@@ -64,7 +64,7 @@ def cmd_smoke(args):
     return subprocess.run(cmd).returncode
 
 def cmd_ui(args):
-    server_script = os.path.join(BASE_DIR, "emulation/harness/server.js")
+    server_script = os.path.join(BASE_DIR, "emulation/ui_harness/main.js")
     env = os.environ.copy()
     env["HTTP_PORT"] = str(args.port)
     env["ROOTFS_PATH"] = selected_rootfs(args)

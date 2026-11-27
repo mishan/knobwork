@@ -28,6 +28,7 @@ none of the patch concepts documented here have been installed on a CMU.
 - [Runtime and UI findings](docs/runtime-and-ui.md)
 - [Emulation architecture](docs/emulation.md)
 - [Emulator handoff review and verified baseline](docs/emulator-review.md)
+- [Independent browser harness specification](docs/browser-harness-independent-spec.md)
 - [Modification and recovery roadmap](docs/roadmap.md)
 - [Reversible overlay manager](overlay/README.md)
 - [Receive-only VIM CAN capture](can/README.md)

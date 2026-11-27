@@ -2,13 +2,23 @@
   "name": "mazda-firmware-emulation",
   "version": "1.0.0",
   "description": "Emulation harness for Mazda Connect Gen 6 CMU firmware",
-  "main": "emulation/harness/server.js",
+  "main": "emulation/ui_harness/main.js",
   "scripts": {
-    "start": "node emulation/harness/server.js",
-    "verify-ui": "node emulation/harness/verify_ui.js"
+    "start": "node emulation/ui_harness/main.js",
+    "test": "node --test emulation/ui_harness/test/*.test.js",
+    "check": "node --check emulation/harness/verify_ui.js && for f in emulation/ui_harness/main.js emulation/ui_harness/lib/*.js emulation/ui_harness/public/*.js; do node --check \"$f\" || exit 1; done && node emulation/ui_harness/tools/repo-check.js",
+    "verify-ui": "node emulation/harness/verify_ui.js",
+    "test:stress": "node emulation/ui_harness/tools/stress.js",
+    "mutate": "for g in boundaries frames scenario lifecycle proxy; do STRYKER_GROUP=$g npx stryker run emulation/ui_harness/stryker.config.mjs || exit 1; done"
   },
   "dependencies": {
     "express": "^4.19.2",
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@stryker-mutator/core": "^10.1.1"
+  },
+  "engines": {
+    "node": ">=14"
   }
 }

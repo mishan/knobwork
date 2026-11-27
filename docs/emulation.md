@@ -114,8 +114,13 @@ Important limitations:
 - it uses macOS `greadlink` and creates links to paths that are not present in
   the checked-out top level, so extraction must be made portable and tested.
 
-It remains valuable as the frontend test harness and should be modernized,
-not discarded.
+It was valuable for establishing the frontend behavior, but its source has no
+identified redistribution license. The derived harness has been replaced by
+the MIT-licensed [`emulation/ui_harness/`](../emulation/ui_harness/README.md),
+implemented without access to it from the behavioral contract in
+[`browser-harness-independent-spec.md`](browser-harness-independent-spec.md), a
+sanitized test package, and observable firmware behavior. Its provenance record
+is [`emulation/ui_harness/PROVENANCE.md`](../emulation/ui_harness/PROVENANCE.md).
 
 ### Custom Application SDK (CASDK)
 
@@ -191,7 +196,8 @@ frontend is the reliable first renderer.
 
 ### Stage 0: deterministic UI harness
 
-Modernize the current browser emulator:
+The independently implemented harness in `emulation/ui_harness/` serves this
+stage. Its goals:
 
 - support 74 unified packages and explicit extracted-root paths;
 - never modify the source firmware tree in place;
