@@ -81,6 +81,9 @@ python3 emulate.py status
 Firmware is user-supplied and is never committed. Prepare the exact North
 American `74.00.324A` package used by the current overlay manifest:
 
+The package password is not included; see
+[`tools/firmware/README.md`](tools/firmware/README.md) for where to put it.
+
 ```sh
 python3 emulate.py unpack /path/to/cmu150_NA_74.00.324A_update.up
 python3 emulate.py smoke
