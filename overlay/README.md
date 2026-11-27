@@ -1,7 +1,6 @@
 # Reversible overlay manager
 
-This is the phase-2 USB transaction manager from
-[`docs/roadmap.md`](../docs/roadmap.md). The pinned bundle installs diagnostic
+This is the USB transaction manager. The pinned bundle installs diagnostic
 scripts, a minimal boot-health bridge, and a Developer Diagnostics proof-of-
 concept under the stock CMU Applications menu. It does not replace stock HMI
 framework files, change NVRAM, or patch native binaries.

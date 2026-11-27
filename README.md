@@ -34,15 +34,15 @@ documented here have been installed on a CMU.
 
 ## Documents
 
-- [Firmware inventory and comparison](docs/firmware-inventory.md)
-- [Runtime and UI findings](docs/runtime-and-ui.md)
 - [Emulation architecture](docs/emulation.md)
-- [Emulator handoff review and verified baseline](docs/emulator-review.md)
 - [Independent browser harness specification](docs/browser-harness-independent-spec.md)
-- [Modification and recovery roadmap](docs/roadmap.md)
+- [Safety rules](docs/safety.md)
+- [Runtime and UI findings](docs/runtime-and-ui.md)
+- [Firmware inventory and comparison](docs/firmware-inventory.md)
 - [Reversible overlay manager](overlay/README.md)
 - [Receive-only VIM CAN capture](can/README.md)
-- [Evidence, hashes, and sources](docs/evidence.md)
+
+Planned work is tracked in the issue tracker.
 
 ## Confidence language
 
@@ -184,7 +184,7 @@ python3 emulate.py verify-ui --expect-overlay-app \
   --screenshot /tmp/mazda-overlay-diagnostics.png
 ```
 
-To exercise Phase 3 optional-script recovery without deleting or corrupting an
+To exercise optional-script recovery without deleting or corrupting an
 installed file, restart the harness with its narrowly scoped fault switch:
 
 ```sh
@@ -404,6 +404,27 @@ Portable, non-overwriting package tools are available through
 `python3 emulate.py unpack` / `python3 emulate.py pack` and directly under
 [`tools/firmware`](tools/firmware). Repacking does not create a valid Mazda RSA
 signature and is not, by itself, safe to flash.
+
+## References
+
+- Mazda-hosted 74.00.324A package:
+  <https://s3.amazonaws.com/tsd.mazdausa.com/MAZDA_CONNECT/cmu150_NA_74.00.324A_update.up>
+- Mazda/NHTSA service bulletin referring to the 74 update family:
+  <https://static.nhtsa.gov/odi/tsbs/2022/MC-10226834-0001.pdf>
+- Community firmware-version research:
+  <https://miatafy.com/firmware/versions/>
+- General CMU hardware/software documentation:
+  <https://silverchris.github.io/mazda-cmu-documentation/>
+- v74 USB launcher and reversible installer example:
+  <https://github.com/Miatafy/TouchTune>
+- Historical Mazda ADB build:
+  <https://github.com/checksummaster/mazda_adb>
+- Mazda ARM cross-toolchain and extracted kernel config:
+  <https://github.com/rpendleton/mazda-toolchain>
+- Mazda IVI reverse-engineering knowledge base:
+  <https://github.com/GrayHatter/Mazda-IVI-Knowledgebase>
+- QEMU SABRE Lite machine documentation:
+  <https://qemu-project.gitlab.io/qemu/system/arm/sabrelite.html>
 
 ## License
 

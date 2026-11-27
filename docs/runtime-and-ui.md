@@ -129,21 +129,3 @@ A useful trace format should correlate:
 
 This lets emulator traces and CMU traces be compared without requiring exact
 wall-clock equivalence.
-
-## Safe UI-development rules
-
-Every deployable UI patch should pass:
-
-1. syntax parsing using an Opera-12-compatible language target;
-2. static checks for undeclared globals and overwritten prototypes;
-3. clean load in the browser emulator;
-4. scripted navigation through affected contexts;
-5. error injection for missing scripts, bad dictionaries, and malformed
-   WebSocket messages;
-6. exact source-file hash precondition at install time;
-7. atomic replacement and retained original;
-8. automatic rollback after repeated HMI startup failure.
-
-Avoid broad minification initially. It makes field diagnosis harder, can expose
-old-engine parser bugs, and changes many boot-critical resources for relatively
-small gains. Target measured hot paths and logging first.
