@@ -59,8 +59,9 @@ make -C can \
 The overlay expects the executable at
 `overlay/usb/payloads/can/cmu-can-listener`, with the SHA-256 pinned in
 `overlay/usb/manifest.v1`. It is not tracked in Git: download it from the
-release built from this source, or build it as above and copy
-`can/build/cmu-can-listener` there. Building requires
+release built from this source, or build it as above and install it there
+with `install -D -m 0755 can/build/cmu-can-listener
+overlay/usb/payloads/can/cmu-can-listener`. Building requires
 `gcc-arm-linux-gnueabi`, `libc6-dev-armel-cross`, and the extracted v74 root.
 Check the result with `sha256sum` against the manifest; the overlay refuses a
 payload whose hash differs. A build from a different toolchain can differ, in
