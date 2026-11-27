@@ -12,7 +12,7 @@
     "mutate": "for g in boundaries frames scenario lifecycle proxy; do STRYKER_GROUP=$g npx stryker run emulation/ui_harness/stryker.config.mjs || exit 1; done"
   },
   "dependencies": {
-    "express": "^4.19.2",
+    "express": "^4.22.3",
     "ws": "^8.18.0"
   },
   "devDependencies": {
